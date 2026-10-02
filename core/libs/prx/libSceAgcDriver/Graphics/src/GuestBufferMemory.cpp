@@ -297,7 +297,7 @@ std::uint64_t physicalMemoryBytes() {
 }
 
 std::uint64_t configuredBudget() {
-    static const std::uint64_t budget = [] {
+    static const std::uint64_t budget = []() -> std::uint64_t {
         const char* value = std::getenv("APS5_HOST_IMPORT_MIB");
         if (value != nullptr) return std::strtoull(value, nullptr, 10) << 20u;
         return std::max<std::uint64_t>(6144ull << 20u, physicalMemoryBytes() / 2);
