@@ -16,6 +16,7 @@
 #include <windows.h>
 #else
 #include <sys/mman.h>
+#include <unistd.h>
 #endif
 #include <atomic>
 #include <bit>
@@ -283,10 +284,23 @@ std::uint64_t retireLeastRecent(const Context& context, HostImports& state, cons
     return freed;
 }
 
+std::uint64_t physicalMemoryBytes() {
+#ifdef _WIN32
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    return GlobalMemoryStatusEx(&status) ? status.ullTotalPhys : 0;
+#else
+    const auto pages = sysconf(_SC_PHYS_PAGES);
+    const auto pageSize = sysconf(_SC_PAGESIZE);
+    return pages > 0 && pageSize > 0 ? static_cast<std::uint64_t>(pages) * static_cast<std::uint64_t>(pageSize) : 0;
+#endif
+}
+
 std::uint64_t configuredBudget() {
     static const std::uint64_t budget = [] {
         const char* value = std::getenv("APS5_HOST_IMPORT_MIB");
-        return (value ? std::strtoull(value, nullptr, 10) : 6144ull) << 20u;
+        if (value != nullptr) return std::strtoull(value, nullptr, 10) << 20u;
+        return std::max<std::uint64_t>(6144ull << 20u, physicalMemoryBytes() / 2);
     }();
     return budget;
 }
@@ -298,7 +312,7 @@ std::uint64_t importBudget(const Context& context, const HostImports& state) {
 
 const HostImport* findImport(HostImports& state, std::uint64_t begin, std::uint64_t end);
 
-const HostImport* importAllocation(const Context& context, HostImports& state, std::uint64_t base, std::uint64_t bytes, const GuestAllocations::Lease& lease) {
+const HostImport* importAllocation(const Context& context, HostImports& state, std::uint64_t base, std::uint64_t bytes, const GuestAllocations::Lease& lease, bool evict = true) {
     if (const auto* covering = findImport(state, base, base + bytes)) return covering;
     auto first = state.imports.upper_bound(base);
     if (first != state.imports.begin() && std::prev(first)->first + std::prev(first)->second.bytes > base) --first;
@@ -315,7 +329,7 @@ const HostImport* importAllocation(const Context& context, HostImports& state, s
     const auto alignment = context.hostImportAlignment;
     if (alignment == 0 || base % alignment != 0 || bytes % alignment != 0 || state.failed.contains(base)) return nullptr;
     const auto budget = importBudget(context, state);
-    if (state.liveBytes + bytes > budget) retireLeastRecent(context, state, lease, state.liveBytes + bytes - budget);
+    if (evict && state.liveBytes + bytes > budget) retireLeastRecent(context, state, lease, state.liveBytes + bytes - budget);
     const auto live = state.liveBytes;
     if (live + bytes > budget) {
         // A refused import turns every later use of the range into CPU copies, so say so.
@@ -1391,7 +1405,7 @@ void GuestBufferMemory::AcquireRegistered() {
             if (importable) {
                 auto& state = Imports();
                 std::lock_guard lock(state.mutex);
-                entry = importAllocation(context, state, range->address, range->bytes, lease);
+                entry = importAllocation(context, state, range->address, range->bytes, lease, false);
             }
             lap(timing.importsUs, at);
             if (entry != nullptr) {
