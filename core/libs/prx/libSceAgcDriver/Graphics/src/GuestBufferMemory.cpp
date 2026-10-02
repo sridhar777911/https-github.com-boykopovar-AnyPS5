@@ -132,7 +132,6 @@ struct HostImports {
     bool unwatchImports = false;
     std::uint64_t useCounter = 0;
     std::uint64_t buildFloor = 0;
-    std::uint64_t maxBytes = 0;
     std::uint64_t liveBytes = 0;
     std::atomic<std::uint64_t> limit{0};
 };
@@ -297,13 +296,21 @@ std::uint64_t importBudget(const Context& context, const HostImports& state) {
     return limit != 0 ? std::min(configuredBudget(), limit) : configuredBudget();
 }
 
-const HostImport* findImport(HostImports& state, std::uint64_t begin, std::uint64_t end, bool* unique = nullptr);
+const HostImport* findImport(HostImports& state, std::uint64_t begin, std::uint64_t end);
 
 const HostImport* importAllocation(const Context& context, HostImports& state, std::uint64_t base, std::uint64_t bytes, const GuestAllocations::Lease& lease) {
     if (const auto* covering = findImport(state, base, base + bytes)) return covering;
-    if (const auto found = state.imports.find(base); found != state.imports.end()) {
-        if (pointerHeld(state, found->second)) return nullptr;
-        retireImport(context, state, found, lease);
+    auto first = state.imports.upper_bound(base);
+    if (first != state.imports.begin() && std::prev(first)->first + std::prev(first)->second.bytes > base) --first;
+    auto last = first;
+    for (; last != state.imports.end() && last->first < base + bytes; ++last) {
+        if (pointerHeld(state, last->second)) return nullptr;
+    }
+    if (first != last) {
+        const auto end = std::max(base + bytes, std::prev(last)->first + std::prev(last)->second.bytes);
+        base = std::min(base, first->first);
+        bytes = end - base;
+        while (first != last) retireImport(context, state, first++, lease);
     }
     const auto alignment = context.hostImportAlignment;
     if (alignment == 0 || base % alignment != 0 || bytes % alignment != 0 || state.failed.contains(base)) return nullptr;
@@ -398,18 +405,12 @@ const HostImport* importAllocation(const Context& context, HostImports& state, s
         return nullptr;
     }
     CountGpuMemory(GpuMemoryKind::HostImport, static_cast<std::int64_t>(bytes));
-    for (auto it = state.imports.lower_bound(base); it != state.imports.end() && it->first < base + bytes;) {
-        const auto next = std::next(it);
-        if (it->second.base + it->second.bytes <= base + bytes && !pointerHeld(state, it->second)) retireImport(context, state, it, lease);
-        it = next;
-    }
     static std::uint64_t importedBytes = 0;
     importedBytes += bytes;
     state.liveBytes += bytes;
     static const bool trace = std::getenv("APS5_TRACE_HOST_IMPORT") != nullptr;
     if (trace) std::fprintf(stderr, "[gpu] host import of 0x%llx+0x%llx ok (%zu live, %.1f MiB live, %.1f MiB ever)\n", static_cast<unsigned long long>(base), static_cast<unsigned long long>(bytes), state.imports.size() + 1, state.liveBytes / 1048576.0, importedBytes / 1048576.0);
     entry.lastUse = ++state.useCounter;
-    state.maxBytes = std::max(state.maxBytes, bytes);
     return &state.imports.emplace(base, entry).first->second;
 }
 
@@ -438,7 +439,6 @@ void refreshImports(const Context& context, HostImports& state, const GuestAlloc
         state.imports.clear();
         state.failed.clear();
         state.liveBytes = 0;
-        state.maxBytes = 0;
         state.device = context.device;
         state.destroyBuffer = context.Function<PFN_vkDestroyBuffer>("vkDestroyBuffer");
         state.freeMemory = context.Function<PFN_vkFreeMemory>("vkFreeMemory");
@@ -461,23 +461,14 @@ void refreshImports(const Context& context, HostImports& state, const GuestAlloc
     for (auto it = state.failed.begin(); it != state.failed.end();) it = containingRange(lease, *it, *it + 1) != nullptr ? std::next(it) : state.failed.erase(it);
 }
 
-const HostImport* findImport(HostImports& state, std::uint64_t begin, std::uint64_t end, bool* unique) {
-    const HostImport* result = nullptr;
-    if (unique != nullptr) *unique = true;
-    for (auto found = state.imports.upper_bound(begin); found != state.imports.begin();) {
-        --found;
-        const auto& entry = found->second;
-        if (begin - entry.base > state.maxBytes) break;
-        if (end > entry.base + entry.bytes) continue;
-        if (result != nullptr) {
-            *unique = false;
-            break;
-        }
-        result = &entry;
-        entry.lastUse = ++state.useCounter;
-        if (unique == nullptr) break;
-    }
-    return result;
+const HostImport* findImport(HostImports& state, std::uint64_t begin, std::uint64_t end) {
+    auto found = state.imports.upper_bound(begin);
+    if (found == state.imports.begin()) return nullptr;
+    --found;
+    const auto& entry = found->second;
+    if (begin < entry.base || end > entry.base + entry.bytes) return nullptr;
+    entry.lastUse = ++state.useCounter;
+    return &entry;
 }
 
 const HostImport* importWindow(const Context& context, HostImports& state, const GuestAllocations::Range& range, std::uint64_t begin, std::uint64_t end, const GuestAllocations::Lease& lease) {
@@ -2711,10 +2702,11 @@ std::uint64_t HostImportSerial(const Context& context, std::uint64_t address, st
     // An import whose registered range changed must not be reused: reconcile first, as an upload
     // does (the walk only runs when the registry changed since the last one).
     if (reconcile && GuestAllocations::GuestAllocationsGeneration_nid_postfix() != state.refreshedGeneration) static_cast<void>(refreshImports(context, state, GuestAllocations::GuestAllocationsAcquire_nid_postfix()));
-    bool unique = true;
-    const auto* found = findImport(state, address, address + bytes, &unique);
-    if (found == nullptr || !unique) return 0;
-    auto& entry = state.imports.at(found->base);
+    auto found = state.imports.upper_bound(address);
+    if (found == state.imports.begin()) return 0;
+    --found;
+    auto& entry = found->second;
+    if (address < entry.base || address + bytes > entry.base + entry.bytes) return 0;
     // Serials are handed out on first use: a fresh import starts at 0, so one made after an earlier
     // import of the same range was dropped can never repeat that import's serial.
     static std::uint64_t serials = 0;
