@@ -311,6 +311,7 @@ void writePixelInfo(Writer& writer, const ShaderPixelStageInfo& info) {
     for (const std::uint8_t value : info.targetExportMapping) {
         writer.WriteU8(value);
     }
+    writer.WriteU8(info.quadPixelMask);
 }
 
 ShaderPixelStageInfo readPixelInfo(Reader& reader, std::uint32_t version) {
@@ -351,6 +352,7 @@ ShaderPixelStageInfo readPixelInfo(Reader& reader, std::uint32_t version) {
     } else {
         info.targetExportMapping.fill(0u);
     }
+    if (version >= 10u) info.quadPixelMask = reader.ReadU8();
     if (version < 5u) {
         const auto input = [](PixelInput value, bool present) { return present ? PixelInputBit(value) : 0u; };
         info.inputAddr = input(PixelInput::PerspectiveSample, info.hasPerspectiveCenterVgpr && inputAddrOrCenterVgpr == 2u) | input(PixelInput::PerspectiveCenter, info.hasPerspectiveCenterVgpr) |

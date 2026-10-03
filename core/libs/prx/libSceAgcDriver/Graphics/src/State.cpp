@@ -495,7 +495,7 @@ State DecodeState(const QueueState& queue) {
     Require((read(cx, 0x8c) & 0xfu) == 0xau, "nonstandard triangle edge rules are unsupported");
     Require(read(cx, 0x2f9) == 0x2du, "nonstandard pixel center or vertex quantization is unsupported");
     Require(read(cx, 0x313) == 0x6000u, "conservative rasterization is unsupported");
-    Require(read(cx, 0x30e) == 0xffffffffu && read(cx, 0x30f) == 0xffffffffu, "sample masks are unsupported");
+    Require((read(cx, 0x2f8) & 7u) == 0 || (read(cx, 0x30e) == 0xffffffffu && read(cx, 0x30f) == 0xffffffffu), "sample masks of multisampled draws are unsupported");
     const auto viewportControl = read(cx, 0x206);
     if (viewportControl != 0x43fu) throw std::runtime_error(vteMessage(viewportControl));
     zero(cx, 0x204, ClipControlMask, "unsupported PA_CL_CLIP_CNTL flags");
@@ -788,7 +788,7 @@ std::string DrawRejection(const QueueState& queue, bool indexed) {
     if (value(cx, 0x2f9, word) && word != 0x2du) return require(false, "nonstandard pixel center or vertex quantization is unsupported");
     if (value(cx, 0x313, word) && word != 0x6000u) return require(false, "conservative rasterization is unsupported");
     std::uint32_t other = 0;
-    if (value(cx, 0x30e, word) && value(cx, 0x30f, other) && (word != 0xffffffffu || other != 0xffffffffu)) return require(false, "sample masks are unsupported");
+    if (value(cx, 0x2f8, word) && (word & 7u) != 0 && value(cx, 0x30e, word) && value(cx, 0x30f, other) && (word != 0xffffffffu || other != 0xffffffffu)) return require(false, "sample masks of multisampled draws are unsupported");
     if (value(cx, 0x206, word) && word != 0x43fu) return vteMessage(word);
     if (auto reason = nonzero(cx, 0x204, ClipControlMask, "unsupported PA_CL_CLIP_CNTL flags"); !reason.empty()) return reason;
     std::uint32_t targetMask = 0, shaderMask = 0;

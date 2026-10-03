@@ -141,6 +141,7 @@ private:
         append(key, value.earlyZ);
         append(key, value.executeOnNoop);
         append(key, value.conservativeZExport);
+        append(key, value.quadPixelMask);
         append(key, value.targetOutputMode);
         append(key, value.targetExportMapping);
     }
