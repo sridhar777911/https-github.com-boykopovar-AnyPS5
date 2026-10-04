@@ -116,6 +116,7 @@ private:
         append(key, value.tgSizeEnable);
         append(key, value.threadIdComponentCount);
         append(key, value.PartialGroups());
+        append(key, value.scratchDwords);
     }
 
     static void append(std::vector<std::uint64_t>& key, const ShaderPixelStageInfo& value) {
