@@ -137,15 +137,18 @@ VkDeviceSize BufferPool::Trim() noexcept {
     VkDeviceSize bytes = 0;
     try {
         std::lock_guard lock(mutex);
-        evicted.reserve(smallTier.free.size() + largeTier.free.size() + deviceTier.free.size());
+        evicted.reserve(smallTier.slots + largeTier.slots + deviceTier.slots);
         for (auto* tier : {&smallTier, &largeTier, &deviceTier}) {
-            for (const auto& slot : tier->free) {
-                evicted.push_back(slot.allocation);
-                bytes += slot.allocation.allocationBytes;
+            for (const auto& [key, slots] : tier->free) {
+                for (const auto& slot : slots) {
+                    evicted.push_back(slot.allocation);
+                    bytes += slot.allocation.allocationBytes;
+                }
             }
-            tier->evictions += tier->free.size();
+            tier->evictions += tier->slots;
             tier->free.clear();
             tier->retainedBytes = 0;
+            tier->slots = 0;
         }
     } catch (...) {
         return 0;
