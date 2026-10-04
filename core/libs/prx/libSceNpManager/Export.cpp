@@ -191,10 +191,8 @@ int APS5_VABI sceNpUnregisterPremiumEventCallback(void) {
     return 0;
 }
 
-
-APS5_EXPORT("cRILAEvn+9M", sceNpManagerUnknown00);
-int APS5_VABI sceNpManagerUnknown00(void) {
-    NotImplemented_nid_no_patch("cRILAEvn+9M");
+int APS5_VABI sceNpUnregisterNpReachabilityStateCallback(void) {
+    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 }
