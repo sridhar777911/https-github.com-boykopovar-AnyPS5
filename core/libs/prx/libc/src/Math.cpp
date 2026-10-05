@@ -1,9 +1,11 @@
 #include <mutex>
+#include <cfenv>
 #include <cstdint>
 #include <cmath>
 #include <cstdint>
 
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/SonyCrt.hpp"
 
 extern "C" {
 
@@ -96,6 +98,18 @@ int APS5_VABI rand_nid_postfix() {
 void APS5_VABI srand_nid_postfix(unsigned int seed) {
     std::lock_guard lock(g_randLock);
     g_randState = seed;
+}
+
+int APS5_VABI __fpclassifyd_nid_postfix(double value) {
+    return SonyFpclassifyd(value);
+}
+
+double APS5_VABI _Sinh_nid_postfix(double x, double y) {
+    return SonySinh(x, y);
+}
+
+int APS5_VABI _Fltrounds_nid_postfix(void) {
+    return SonyFltrounds();
 }
 
 }
