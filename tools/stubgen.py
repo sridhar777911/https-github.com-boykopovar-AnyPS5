@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import re
 import sys
+
+
+CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
+SUFFIX = bytes([0x51, 0x8D, 0x64, 0xA6, 0x35, 0xDE, 0xD8, 0xC1,
+                0xE6, 0xB0, 0x39, 0xB1, 0xC3, 0xE5, 0x52, 0x30])
 
 
 def strip_nid_token(raw):
@@ -68,47 +74,94 @@ def module_prefix(module):
     return sanitize_identifier(base)
 
 
-def camel_part(real_name):
-    stripped = re.sub(r"^_+", "", real_name)
-    if not stripped:
-        return "Anon"
-    chunks = [c for c in re.split(r"[^0-9A-Za-z]+", stripped) if c]
-    if not chunks:
-        return "Anon"
-    out = "".join(c[0].upper() + c[1:] for c in chunks)
-    out = sanitize_identifier(out)
-    if out[0].isdigit():
-        out = "_" + out
-    return out
+def compute_nid(symbol):
+    digest = hashlib.sha1(symbol.encode() + SUFFIX).digest()
+    rev = bytes(digest[7 - i] for i in range(8))
+    out = []
+    for i in range(0, 6, 3):
+        triple = (rev[i] << 16) | (rev[i + 1] << 8) | rev[i + 2]
+        out += [CHARSET[(triple >> 18) & 63], CHARSET[(triple >> 12) & 63],
+                CHARSET[(triple >> 6) & 63], CHARSET[triple & 63]]
+    tail = (rev[6] << 16) | (rev[7] << 8)
+    out += [CHARSET[(tail >> 18) & 63], CHARSET[(tail >> 12) & 63],
+            CHARSET[(tail >> 6) & 63]]
+    return "".join(out)
 
 
-def generate(module, nids, db):
+def is_runtime_name(name):
+    if name.startswith("_"):
+        return True
+    if name.startswith("sce") or name.startswith("Sce"):
+        return False
+    return True
+
+
+def is_valid_ident(name):
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) is not None
+
+
+def td_target(module, td_path, td_lib):
+    if td_path is None:
+        if module == "libc":
+            td_path = "core/libs/prx/libc/Export.cpp"
+        elif module == "libkernel":
+            td_path = "core/libs/prx/libkernel/Export.cpp"
+        else:
+            td_path = "core/libs/prx/" + module + "/Export.cpp"
+    if td_lib is None:
+        if module == "libc":
+            td_lib = "libc"
+        elif module == "libkernel":
+            td_lib = "libkernel"
+        else:
+            td_lib = module
+    return (td_path, td_lib)
+
+
+def generate(module, nids, db, td_path=None, td_lib=None):
     prefix = module_prefix(module)
+    path, lib = td_target(module, td_path, td_lib)
     used = set()
     unknown_counter = 0
     chunks = []
+    td = []
     for nid in nids:
         real = db.get(nid)
+        func = None
+        display = None
         if real is not None:
-            func = prefix + camel_part(real)
-            base = func
-            dup = 2
-            while func in used:
-                func = "%s_%d" % (base, dup)
-                dup += 1
-        else:
+            if is_valid_ident(real):
+                if compute_nid(real) == nid:
+                    if is_runtime_name(real):
+                        candidate = real + "_nid_postfix"
+                    else:
+                        candidate = real
+                    if candidate not in used:
+                        func = candidate
+                        display = real
+        if func is None:
             while True:
                 func = "%sUnknown%02d" % (prefix, unknown_counter)
                 unknown_counter += 1
                 if func not in used:
                     break
+            display = None
         used.add(func)
-        chunks.append("")
-        chunks.append('APS5_EXPORT("%s", %s);' % (nid, func))
-        chunks.append("int APS5_VABI %s(void) {" % func)
-        chunks.append('    NotImplemented_nid_no_patch("%s");' % nid)
-        chunks.append("    return 0;")
-        chunks.append("}")
+        if display is not None:
+            chunks.append("")
+            chunks.append("int APS5_VABI %s(void) {" % func)
+            chunks.append('    NotImplemented_nid_no_patch("%s");' % nid)
+            chunks.append("    return 0;")
+            chunks.append("}")
+            td.append("- [%s](%s) (%s) - unknown signature" % (display, path, lib))
+        else:
+            chunks.append("")
+            chunks.append('APS5_EXPORT("%s", %s);' % (nid, func))
+            chunks.append("int APS5_VABI %s(void) {" % func)
+            chunks.append('    NotImplemented_nid_no_patch("%s");' % nid)
+            chunks.append("    return 0;")
+            chunks.append("}")
+            td.append("- [%s](%s) (%s) - unknown name, signature" % (nid, path, lib))
     header = []
     header.append("#include <cstdint>")
     header.append("#include <cstddef>")
@@ -117,26 +170,49 @@ def generate(module, nids, db):
     header.append("")
     header.append('extern "C" {')
     footer = ["", "}"]
-    return "\n".join(header + chunks + footer) + "\n"
+    code = "\n".join(header + chunks + footer) + "\n"
+    td_text = "\n".join(td) + ("\n" if td else "")
+    return (code, td_text)
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Generate AnyPS5 Export.cpp skeletons")
-    ap.add_argument("--module", required=True, help="target module name, e.g. libSceAmpr")
-    ap.add_argument("--nids", required=True, help="path to missing-NIDs file")
-    ap.add_argument("--db", required=False, default=None, help="path to NID->name CSV")
-    ap.add_argument("--out", required=False, default=None, help="output file (default stdout)")
+    ap = argparse.ArgumentParser(description="Generate AnyPS5 Export.cpp skeletons and TechnicalDebt lines")
+    ap.add_argument("--module", required=True, help="target module name, e.g. libSceAmpr, used for UnknownNN prefix and default TechnicalDebt path core/libs/prx/MODULE/Export.cpp")
+    ap.add_argument("--nids", required=True, help="path to missing-NIDs file, one 11-char NID per line")
+    ap.add_argument("--db", required=False, default=None, help="path to NID name CSV, NID name per line like aerolib.csv")
+    ap.add_argument("--out", required=False, default=None, help="output file for code, default stdout")
+    ap.add_argument("--td-path", required=False, default=None, help="override file path used inside TechnicalDebt lines, default derived from module")
+    ap.add_argument("--td-lib", required=False, default=None, help="override lib label used inside TechnicalDebt lines, default derived from module")
+    ap.add_argument("--td-out", required=False, default=None, help="output file for TechnicalDebt lines, default stdout")
+    ap.add_argument("--td-only", action="store_true", help="print only TechnicalDebt lines, no code")
     args = ap.parse_args(argv)
     nids = parse_nids(args.nids)
     db = {}
     if args.db:
         db = parse_db(args.db)
-    text = generate(args.module, nids, db)
+    code, td = generate(args.module, nids, db, args.td_path, args.td_lib)
+    if args.td_only:
+        if args.td_out:
+            with open(args.td_out, "w", encoding="utf-8", newline="\n") as f:
+                f.write(td)
+        else:
+            sys.stdout.write(td)
+        return 0
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
+            f.write(code)
     else:
-        sys.stdout.write(text)
+        sys.stdout.write(code)
+    if args.td_out:
+        with open(args.td_out, "w", encoding="utf-8", newline="\n") as f:
+            f.write(td)
+    else:
+        if args.out:
+            sys.stdout.write(td)
+        else:
+            if td:
+                sys.stdout.write("\n")
+                sys.stdout.write(td)
     return 0
 
 
