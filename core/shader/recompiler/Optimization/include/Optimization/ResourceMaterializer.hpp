@@ -38,6 +38,7 @@ struct ResourceSpecialization {
     std::vector<Buffer> buffers;
     std::vector<Image> images;
     std::vector<std::uint8_t> tableViewClasses;
+    std::vector<SrtReadPoison> srtPoison;
 
     bool operator==(const ResourceSpecialization& other) const;
 

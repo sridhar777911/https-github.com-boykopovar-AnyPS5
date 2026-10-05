@@ -434,6 +434,7 @@ struct RecompileResult {
     std::vector<ImageTableEntryPoison> imageTablePoison;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> imageTableRanges;
     std::uint64_t imageTableShader = 0;
+    std::uint32_t poisonedSrtReads = 0;
 };
 
 [[nodiscard]] RecompileResult Recompile(const RecompileRequest& request);

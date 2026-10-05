@@ -694,7 +694,7 @@ private:
     std::map<std::pair<WordsKey, bool>, std::uint32_t> samplerIndex;
 };
 
-void materializeSnapshot(const IrResourcePlan& plan, const SrtRuntime& runtime, SrtWalker& walker, ResourceSnapshot& snapshot, std::vector<std::uint8_t>& activeSources) {
+void materializeSnapshot(const IrResourcePlan& plan, const SrtRuntime& runtime, SrtWalker& walker, ResourceSnapshot& snapshot, std::vector<std::uint8_t>& activeSources, std::vector<SrtReadPoison>& poison) {
     snapshot = ResourceSnapshot{};
     if (plan.uniformFill.fill.kind != UniformFillKind::None) {
         const auto words = plan.uniformFill.fill.words;
@@ -717,7 +717,7 @@ void materializeSnapshot(const IrResourcePlan& plan, const SrtRuntime& runtime, 
     snapshot.userData.assign(runtime.userData.begin(), runtime.userData.begin() + plan.userDataCount);
 
     std::vector<DescriptorValue> values;
-    walker.EvaluateRuntimeSources(plan, plan.materializationSources, runtime, values, snapshot.flattenedSrt, plan.cleanFlatSlots, activeSources);
+    walker.EvaluateRuntimeSources(plan, plan.materializationSources, runtime, values, snapshot.flattenedSrt, plan.cleanFlatSlots, activeSources, &poison);
 
     std::size_t cursor = 0;
     if (values.size() < plan.info.buffers.size()) {
@@ -947,6 +947,15 @@ void ResourceMaterializer::Apply(IrProgram& program, const ResourceSpecializatio
     }
     if (resources.info.tableViews.size() != specialization.tableViewClasses.size()) {
         throw std::runtime_error("ResourceMaterializer::Apply table view count mismatch");
+    }
+    for (const auto& poison : specialization.srtPoison) {
+        if (poison.slot >= resources.srtReads.size()) {
+            throw std::runtime_error("ResourceMaterializer::Apply poisoned SRT read is out of range");
+        }
+    }
+    resources.srtPoison = specialization.srtPoison;
+    if (!specialization.srtPoison.empty()) {
+        resources.info.usesFaultBuffer = true;
     }
 
     auto buffers = resources.info.buffers;
@@ -1276,8 +1285,9 @@ void ResourceMaterializer::Materialize(const IrResourcePlan& program, const SrtR
     SrtWalker walker;
     ResourceSnapshot nextSnapshot;
     std::vector<std::uint8_t> activeSources;
+    std::vector<SrtReadPoison> poison;
     try {
-        materializeSnapshot(plan, runtime, walker, nextSnapshot, activeSources);
+        materializeSnapshot(plan, runtime, walker, nextSnapshot, activeSources, poison);
         TableSnapshotter(plan, runtime, walker, activeSources, nextSnapshot.tables).Run();
     } catch (...) {
         reportTables();
@@ -1286,6 +1296,7 @@ void ResourceMaterializer::Materialize(const IrResourcePlan& program, const SrtR
     ResourceSpecialization nextSpecialization;
     const auto started = MaterializeProfiled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     buildResourceSpecialization(plan, nextSnapshot, nextSpecialization);
+    nextSpecialization.srtPoison = std::move(poison);
     if (MaterializeProfiled()) specializationNanoseconds.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count()), std::memory_order_relaxed);
     snapshot = std::move(nextSnapshot);
     specialization = std::move(nextSpecialization);
@@ -1305,7 +1316,7 @@ bool ResourceSpecialization::Image::operator==(const Image& other) const {
 }
 
 bool ResourceSpecialization::operator==(const ResourceSpecialization& other) const {
-    return buffers == other.buffers && images == other.images && tableViewClasses == other.tableViewClasses;
+    return buffers == other.buffers && images == other.images && tableViewClasses == other.tableViewClasses && srtPoison == other.srtPoison;
 }
 
 }

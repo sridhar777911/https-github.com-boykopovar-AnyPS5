@@ -2082,6 +2082,112 @@ void verifyFunctionLdsBound() {
     require(unsized == FunctionLdsDwordLimit, "function LDS: an access without a known width must keep the full array");
 }
 
+void verifyGuardedNullPointers() {
+    using namespace ShaderRecompiler;
+    constexpr std::size_t Reserved = 0x10000;
+    void* reserved = nullptr;
+#ifdef _WIN32
+    reserved = VirtualAlloc(nullptr, Reserved, MEM_RESERVE, PAGE_NOACCESS);
+#else
+    reserved = mmap(nullptr, Reserved, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (reserved == MAP_FAILED) reserved = nullptr;
+#endif
+    require(reserved != nullptr, "guarded pointer: cannot reserve an inaccessible range");
+    const auto unmapped = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(reserved));
+    static std::array<std::uint32_t, 64> output{};
+    static std::array<std::uint32_t, 16> root{};
+    static std::uint32_t payload = 0x3f800000u;
+    static std::uint64_t indirect = 0;
+    const auto outputV = TableV(output.data(), 0u, static_cast<std::uint32_t>(sizeof(output)));
+    std::copy(outputV.begin(), outputV.end(), root.begin());
+    root[4] = 1u;
+    const auto point = [&](std::uint64_t address) {
+        root[6] = static_cast<std::uint32_t>(address);
+        root[7] = static_cast<std::uint32_t>(address >> 32u);
+    };
+    const auto payloadAddress = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(&payload));
+    const std::vector<std::uint32_t> branchCode{0xf4080100u, 0xfa000000u, 0xf4000200u, 0xfa000010u, 0xf4040280u, 0xfa000018u, 0xbe8c03ffu, 0x11111111u,
+        0xbf8cc07fu, 0xbf068008u, 0xbf850003u, 0xf4000305u, 0xfa000000u, 0xbf8cc07fu, 0x7e02020cu, 0x34040082u, 0xe0701000u, 0x80010102u, 0xbf810000u};
+    const std::vector<std::uint32_t> chainCode{0xf4080100u, 0xfa000000u, 0xf4000200u, 0xfa000010u, 0xf4040280u, 0xfa000018u, 0xbe8c03ffu, 0x11111111u,
+        0xbf8cc07fu, 0xbf068008u, 0xbf850006u, 0xf4040385u, 0xfa000000u, 0xbf8cc07fu, 0xf4000307u, 0xfa000000u, 0xbf8cc07fu, 0x7e02020cu, 0x34040082u,
+        0xe0701000u, 0x80010102u, 0xbf810000u};
+    const std::vector<std::uint32_t> descriptorCode{0xf4040280u, 0xfa000018u, 0xbf8cc07fu, 0xf4080105u, 0xfa000000u, 0xbf8cc07fu, 0x34040082u, 0xe0701000u,
+        0x80010002u, 0xbf810000u};
+    const auto slotPc = [](const IrResourcePlan& plan, std::uint32_t slot) { return plan.srtReads.at(slot).value->Flags<MemoryFlags>().pc; };
+    const auto faultBinding = [](const RecompileResult& result) {
+        return std::any_of(result.bindings.begin(), result.bindings.end(), [](const DescriptorBinding& binding) { return binding.role == DescriptorRole::FaultBuffer; });
+    };
+
+    TableRequest branch(branchCode, root.data());
+    point(payloadAddress);
+    AgcDriver::ShaderMemory validMemory({});
+    const auto valid = validMemory.Capture(branch.request);
+    require(valid->specialization.srtPoison.empty(), "guarded pointer: a mapped nested pointer was poisoned");
+    branch.request.context.memory = validMemory.Regions();
+    const auto validResult = Recompile(branch.request, *valid);
+    require(validResult->poisonedSrtReads == 0u && !faultBinding(*validResult) && validResult->bdaAbiVersion == 0u, "guarded pointer: a variant without poison has a fault buffer");
+
+    for (const auto pointer : {std::uint64_t{0}, unmapped}) {
+        for (const auto condition : {1u, 0u}) {
+            point(pointer);
+            root[4] = condition;
+            branch.request.context.memory = {};
+            AgcDriver::ShaderMemory memory({});
+            const auto capture = memory.Capture(branch.request);
+            const auto& poison = capture->specialization.srtPoison;
+            require(poison.size() == 1u && poison[0].pc == 0x2cu && poison[0].address == pointer && slotPc(*capture->plan, poison[0].slot) == 0x2cu, "guarded pointer: the nested read was not poisoned at its pc and address");
+            require(capture->snapshot.flattenedSrt.at(poison[0].slot) == 0u, "guarded pointer: a poisoned slot does not read zero");
+            const auto regions = memory.Regions();
+            require(!TableTouched(regions, reinterpret_cast<const void*>(static_cast<std::uintptr_t>(pointer)), 4u) && TableCovered(regions, root.data() + 6, 8u), "guarded pointer: the captured regions are wrong");
+            branch.request.context.memory = regions;
+            const auto result = Recompile(branch.request, *capture);
+            require(result->poisonedSrtReads == 1u && faultBinding(*result) && result->bdaAbiVersion == BdaAbi::Version && result->variantId != validResult->variantId, "guarded pointer: the poisoned variant does not report through the fault buffer");
+            const auto replay = Recompile(branch.request);
+            require(replay.poisonedSrtReads == 1u && replay.variantId == result->variantId, "guarded pointer: a replay of the captured regions did not reproduce the poison");
+            verifyResult(*result, replay);
+#if ANYPS5_ENABLE_SPIRV_TOOLS
+            static_cast<void>(ValidateAndOptimizeSpirv(result->spirv, branch.request.target.vulkanVersion, branch.request.target.spirvVersion));
+#endif
+        }
+    }
+    root[4] = 1u;
+
+    TableRequest chain(chainCode, root.data());
+    point(unmapped);
+    AgcDriver::ShaderMemory chainMemory({});
+    const auto chained = chainMemory.Capture(chain.request);
+    const auto& chainPoison = chained->specialization.srtPoison;
+    require(chainPoison.size() == 3u, "guarded pointer: a pointer read through an unmapped pointer did not poison its two words and the read through it");
+    for (const auto& poison : chainPoison) {
+        const auto own = slotPc(*chained->plan, poison.slot);
+        const bool pointerWord = own == 0x2cu && (poison.address == unmapped || poison.address == unmapped + 4u);
+        const bool throughPointer = own == 0x38u && poison.address == unmapped;
+        require(poison.pc == 0x2cu && (pointerWord || throughPointer), "guarded pointer: a derived poison does not name the inaccessible read");
+    }
+    indirect = 0;
+    point(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(&indirect)));
+    AgcDriver::ShaderMemory nullChainMemory({});
+    const auto nullChain = nullChainMemory.Capture(chain.request);
+    require(nullChain->specialization.srtPoison.size() == 1u && nullChain->specialization.srtPoison[0].pc == 0x38u && nullChain->specialization.srtPoison[0].address == 0u, "guarded pointer: a null pointer read from memory did not poison the read through it");
+    indirect = payloadAddress;
+    AgcDriver::ShaderMemory mappedChainMemory({});
+    require(mappedChainMemory.Capture(chain.request)->specialization.srtPoison.empty(), "guarded pointer: a mapped pointer chain was poisoned");
+
+    TableRequest descriptor(descriptorCode, root.data());
+    point(0u);
+    AgcDriver::ShaderMemory descriptorMemory({});
+    expectFailure([&] { static_cast<void>(descriptorMemory.Capture(descriptor.request)); }, "null or misaligned address", "guarded pointer: a V# loaded through a null nested pointer was accepted");
+    TableRequest rootless(branchCode, nullptr);
+    AgcDriver::ShaderMemory rootlessMemory({});
+    expectFailure([&] { static_cast<void>(rootlessMemory.Capture(rootless.request)); }, "null or misaligned address", "guarded pointer: a null user-data pointer was accepted");
+    point(0u);
+#ifdef _WIN32
+    VirtualFree(reserved, 0, MEM_RELEASE);
+#else
+    munmap(reserved, Reserved);
+#endif
+}
+
 int main() {
     try {
         using namespace ShaderRecompiler;
@@ -2113,6 +2219,7 @@ int main() {
         verifyBdaReadFallbackFunctions();
         verifyFaultSlotClaimedFirst();
         verifyFunctionLdsBound();
+        verifyGuardedNullPointers();
 #if ANYPS5_ENABLE_SPIRV_TOOLS
         const std::vector<std::uint32_t> minimalSpirv{
             0x07230203u, 0x00010000u, 0u, 5u, 0u,
@@ -2295,8 +2402,19 @@ int main() {
         expectFailure([&] { static_cast<void>(PrepareResourceProgram(request)); }, "shader user data exceeds the scalar register bank", "user data overran scalar register bank");
         request.context.userDataBaseRegister = 8;
         request.context.memory = {};
+        request.target.bdaAbiVersion = BdaAbi::Version;
+        AgcDriver::ShaderMemory guarded({});
+        const auto poisoned = guarded.Capture(request);
+        require(poisoned->specialization.srtPoison.size() == 1u && poisoned->specialization.srtPoison[0].pc == 8u && poisoned->specialization.srtPoison[0].address == 0u, "null nested pointer was not poisoned at its read");
+        const auto guardedRegions = guarded.Regions();
+        request.context.memory = guardedRegions;
+        const auto poisonedVertex = Recompile(request, *poisoned);
+        require(poisonedVertex->poisonedSrtReads == 1u && poisonedVertex->bdaAbiVersion == BdaAbi::Version && std::any_of(poisonedVertex->bindings.begin(), poisonedVertex->bindings.end(), [](const DescriptorBinding& binding) { return binding.role == DescriptorRole::FaultBuffer; }), "a vertex shader reading through a null nested pointer has no fault buffer");
+        request.context.memory = {};
+        const std::array<std::uint32_t, 2> nullUserData{};
+        request.context.userData = nullUserData;
         AgcDriver::ShaderMemory invalid({});
-        expectFailure([&] { invalid.Capture(request); }, "null or misaligned address", "null nested pointer was accepted");
+        expectFailure([&] { invalid.Capture(request); }, "null or misaligned address", "null user-data pointer was accepted");
         std::cout << "Shader memory capture, strict validation and deterministic replay passed\n";
         return 0;
     } catch (const std::exception& error) {

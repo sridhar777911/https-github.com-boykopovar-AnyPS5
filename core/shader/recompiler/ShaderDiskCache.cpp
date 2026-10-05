@@ -63,7 +63,7 @@ std::filesystem::path ShaderCacheDirectory() {
 namespace ShaderRecompiler::ShaderDiskCache {
 
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
-static_assert(sizeof(RecompileResult) == 232, "RecompileResult changed: update EncodeResult and DecodeResult");
+static_assert(sizeof(RecompileResult) == 240, "RecompileResult changed: update EncodeResult and DecodeResult");
 static_assert(sizeof(DescriptorBinding) == 472, "DescriptorBinding changed: update the binding encoder");
 static_assert(sizeof(VertexAttribute) == 28, "VertexAttribute changed: update the attribute encoder");
 static_assert(sizeof(FragmentParameter) == 12, "FragmentParameter changed: update the parameter encoder");
@@ -79,7 +79,7 @@ static_assert(sizeof(StageOutput) == 48, "StageOutput changed: update the info e
 static_assert(sizeof(IrBindingLayout) == 64, "IrBindingLayout changed: update the layout encoder");
 static_assert(sizeof(IrDescriptorBinding) == 32, "IrDescriptorBinding changed: update the layout encoder");
 static_assert(sizeof(BindingAllocationResult) == 120, "BindingAllocationResult changed: update the allocation encoder");
-static_assert(sizeof(ResourceSpecialization) == 96, "ResourceSpecialization changed: update BuildKey");
+static_assert(sizeof(ResourceSpecialization) == 120, "ResourceSpecialization changed: update BuildKey");
 static_assert(sizeof(ResourceSpecialization::Buffer) == 16, "ResourceSpecialization::Buffer changed: update BuildKey");
 static_assert(sizeof(ResourceSpecialization::Image) == 36, "ResourceSpecialization::Image changed: update BuildKey");
 static_assert(sizeof(BindingLayout) == 16, "BindingLayout changed: update BuildKey");
@@ -849,6 +849,11 @@ void BuildKey(const RecompileRequest& request, std::uint32_t hostSubgroupSize, c
     });
     writer.Values(std::span<const std::uint8_t>(specialization.tableViewClasses));
     writer.Values(std::span<const std::uint32_t>(specialization.boundDescriptors));
+    writer.List(specialization.srtPoison, [](Writer& out, const SrtReadPoison& poison) {
+        out.Value(poison.slot);
+        out.Value(poison.pc);
+        out.Value(poison.address);
+    });
     const auto& switches = switchKey();
     key.insert(key.end(), switches.begin(), switches.end());
 }

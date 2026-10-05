@@ -1415,6 +1415,21 @@ std::uint32_t EmitReadConst(SpirvValueEmitContext& ctx, const IrValue& inst) {
     if (state.flattenedSrtVariable == 0) {
         ctx.Fail(inst, "requires the flattened SRT descriptor");
     }
+    const auto& poisoned = state.program.Resources().srtPoison;
+    if (!poisoned.empty()) {
+        const IrValue* slot = inst.Argument(1)->Resolve();
+        if (!slot->HasImmediate()) {
+            ctx.Fail(inst, "reads the flattened SRT at a runtime slot while some slots are poisoned");
+        }
+        const auto found = std::find_if(poisoned.begin(), poisoned.end(), [&](const SrtReadPoison& poison) { return poison.slot == slot->ImmediateU32(); });
+        if (found != poisoned.end()) {
+            if (state.faultBufferVariable == 0) {
+                ctx.Fail(inst, "reads a poisoned SRT slot without a fault buffer");
+            }
+            RecordBdaFaultWords(state, ConstantU32(state, static_cast<std::uint32_t>(found->address)), ConstantU32(state, static_cast<std::uint32_t>(found->address >> 32u)), ConstantU32(state, 4u), ConstantU32(state, found->pc), BdaAbi::FaultReason::Unmapped);
+            StopBdaInvocationIf(state, ConstantBool(state, true));
+        }
+    }
     const auto pointer = state.module.AllocateId();
     state.module.AddFunction(spv::OpAccessChain, TypeStorageBufferElementPointer(state), pointer, state.flattenedSrtVariable, ConstantU32(state, 0u), ctx.Arg(inst, 1));
     const auto value = state.module.AllocateId();

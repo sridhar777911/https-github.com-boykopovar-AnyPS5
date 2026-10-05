@@ -392,6 +392,7 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
     result.imageTableRanges.clear();
     for (const auto& range : snapshot.tables.ranges) result.imageTableRanges.emplace_back(range.base, range.size);
     result.imageTableShader = snapshot.tables.shader;
+    result.poisonedSrtReads = static_cast<std::uint32_t>(variant.specialization.srtPoison.size());
     for (auto& attribute : result.vertexAttributes) {
         if (!request.context.vertex || attribute.location >= request.context.vertex->resourcesNum) throw std::runtime_error("Shader cache: invalid vertex attribute metadata");
         attribute.resource = request.context.vertex->resources[attribute.location];
