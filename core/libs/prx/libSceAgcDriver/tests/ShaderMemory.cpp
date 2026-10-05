@@ -298,6 +298,21 @@ void verifyScalarBufferRule() {
     }
 }
 
+void verifyScalarAddressRule() {
+    namespace Abi = ShaderRecompiler::ImageTableAbi;
+    require(Abi::ScalarAddressDword(0x1000u, 0x23u, 0x41u) == 0x1060u && Abi::ScalarAddressDword(0x1001u, 0x20u, 0u) == 0x1021u, "scalar address rule: the offset and immediate are not dword-aligned on their own");
+    require(Abi::ScalarAddressDword(0x1000u, 0x20u, 0xfffffff0u) == 0x1010u && !Abi::ScalarAddressDword(0x8u, 0x4u, 0xfffffff0u).has_value(), "scalar address rule: a negative immediate is wrong");
+    require(!Abi::ScalarAddressDword(0xfffffffffffffff0ull, 0x10u, 0u).has_value() && !Abi::ScalarAddressDword(0xfffffffffffffff0ull, 0x8u, 0x8u).has_value() && Abi::ScalarAddressDword(0xfffffffffffffff0ull, 0x8u, 0x4u) == 0xfffffffffffffffcull, "scalar address rule: a carry past 2^64 is wrong");
+    for (const std::uint32_t stride : {4u, 32u, 48u, 0x330u}) {
+        const std::uint64_t records = Abi::ScalarAddressRecords(stride);
+        require((records - 1u) * stride <= 0xffffffffull && records * stride > 0xffffffffull, "scalar address rule: the record count does not end at 2^32");
+        for (const std::uint32_t maxKey : {0u, 0xffu, 0xffffu, 0x3fffffffu, 0x40000000u, 0xffffffffu}) {
+            const bool exact = static_cast<std::uint64_t>(maxKey) * stride <= 0xffffffffull;
+            require(Abi::KeyRecords(maxKey, stride) == (exact ? maxKey + 1u : 0xffffffffu), "scalar address rule: the key bound is wrong");
+        }
+    }
+}
+
 void verifyImageTablePlans() {
     using namespace ShaderRecompiler;
     static std::array<std::uint32_t, 16> srt{};
@@ -766,6 +781,143 @@ void verifyImageTableReduction() {
     static_cast<void>(compile(tableImageCode, 0x56000u));
     std::fill(guest.heap.begin(), guest.heap.end(), 0u);
     directS({0u, 0u, 0u, 0u});
+}
+
+void verifyPointerImageTable() {
+    using namespace ShaderRecompiler;
+    namespace Abi = ImageTableAbi;
+    constexpr std::uint32_t Format8888UNorm = 56;
+    constexpr std::uint32_t Format32UInt = 20;
+    constexpr std::uint32_t Type2D = 9;
+    constexpr std::uint32_t Palette = 0x40;
+    constexpr std::uint32_t Entries = 256;
+    constexpr std::size_t Committed = 0x1f0000;
+    constexpr std::size_t Reserved = 0x400000;
+    static TableTexture textures[2];
+    void* block = nullptr;
+#ifdef _WIN32
+    block = VirtualAlloc(nullptr, Reserved, MEM_RESERVE, PAGE_NOACCESS);
+    require(block != nullptr && VirtualAlloc(block, Committed, MEM_COMMIT, PAGE_READWRITE) == block, "pointer image table: cannot map the root");
+#else
+    block = mmap(nullptr, Reserved, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    require(block != MAP_FAILED && mprotect(block, Committed, PROT_READ | PROT_WRITE) == 0, "pointer image table: cannot map the root");
+#endif
+    auto* root = static_cast<std::uint32_t*>(block);
+    const auto base = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(root));
+    static std::array<std::uint32_t, 8> keys{};
+    static std::array<std::uint32_t, 4> output{};
+    const auto keysV = TableV(keys.data(), 0u, static_cast<std::uint32_t>(sizeof(keys)));
+    const auto outputV = TableV(output.data(), 0u, static_cast<std::uint32_t>(sizeof(output)));
+    std::copy(keysV.begin(), keysV.end(), root);
+    std::copy(outputV.begin(), outputV.end(), root + 4);
+    const auto pointer = base + Palette + 0x100u;
+    root[12] = static_cast<std::uint32_t>(pointer);
+    root[13] = static_cast<std::uint32_t>(pointer >> 32u);
+    const auto entry = [&](std::uint32_t index, std::array<std::uint32_t, 4> words) {
+        std::copy(words.begin(), words.end(), root + (Palette + index * 32u) / 4u);
+    };
+    entry(0, TableT(textures[0].bytes.data(), Format8888UNorm, Type2D));
+    entry(1, TableT(textures[0].bytes.data(), Format8888UNorm, Type2D));
+    entry(2, TableT(textures[1].bytes.data(), Format32UInt, Type2D));
+    entry(4, {0x1234u, 0x5678u, 0x9abcu, 0x0000ffacu});
+    entry(255, TableT(textures[1].bytes.data(), Format32UInt, Type2D));
+    root[(Palette + 5u * 32u) / 4u + 6u] = 7u;
+
+    const std::vector<std::uint32_t> maskedCode{0xf4080200u, 0xfa000000u, 0xf4080700u, 0xfa000010u, 0xf4080800u, 0xfa000020u, 0x7e200500u, 0x8f108210u,
+        0xf4200444u, 0x20000000u, 0x8711ff11u, 0x000000ffu, 0x8f128511u, 0xf40c0900u, 0x24000040u, 0xf09c0f08u, 0x01090000u, 0xe0700000u, 0x80070000u, 0xbf810000u};
+    TableRequest masked(maskedCode, root);
+    const auto plan = GetResourcePlan(masked.request);
+    require(plan->info.tableViews.size() == 1u && !plan->info.tableViews[0].sampler && !plan->info.tableViews[0].r128, "pointer image table: the view is wrong");
+    const auto& column = ColumnOf(*plan, 0);
+    require(column.address && column.stride == 32u && column.addend == 0u && column.offset == Palette && column.dwordCount == 8u && column.maxKey == 0xffu && !column.keyDomain.has_value(), "pointer image table: the column is wrong");
+    require(plan->descriptorSources.at(column.heapSource).dwordCount == 2u, "pointer image table: the table base is not a 64-bit pointer");
+    std::uint32_t planningOnly = 0;
+    for (const auto& memory : plan->memoryInfo) {
+        if (memory.kind == ResourceKind::ScalarAddress && memory.offset >= Palette && memory.offset < Palette + 32u && memory.planningOnly) planningOnly++;
+    }
+    require(planningOnly == 8u && !plan->info.usesDma && plan->info.usesFaultBuffer, "pointer image table: the descriptor loads still read through BDA");
+
+    std::vector<std::uint32_t> expected(Entries, Abi::NullCode);
+    expected[0] = expected[1] = Abi::ImageCode(Abi::FloatClass, 0);
+    expected[2] = expected[255] = Abi::ImageCode(Abi::UintClass, 1);
+    expected[4] = Abi::PoisonCode(1);
+    expected[5] = Abi::PoisonCode(2);
+    AgcDriver::ShaderMemory memory({});
+    const auto capture = memory.Capture(masked.request);
+    const auto& tables = capture->snapshot.tables;
+    require(ViewWord(tables, 0, Abi::ViewKeyCount) == Entries && ViewWord(tables, 0, Abi::ViewSizeLow) == 0u && ViewWord(tables, 0, Abi::ViewSizeHigh) == 0u && ViewWord(tables, 0, Abi::ViewBaseLow) == static_cast<std::uint32_t>(base) && ViewWord(tables, 0, Abi::ViewBaseHigh) == static_cast<std::uint32_t>(base >> 32u), "pointer image table: the map header is wrong");
+    require(ViewCodes(tables, 0) == expected, "pointer image table: the map codes are wrong");
+    require(tables.images.size() == 2u && tables.images[1].words.dwordCount == 8u && tables.images[1].words.dwords[0] == root[(Palette + 2u * 32u) / 4u], "pointer image table: the entries are wrong");
+    require(tables.poison.size() == 3u && tables.poison[1].reason == Abi::PoisonReason::NotImage && tables.poison[1].address == base + Palette + 4u * 32u && tables.poison[2].words.dwords[6] == 7u, "pointer image table: the poison entries are wrong");
+    require(tables.ranges == std::vector<ImageTableRange>{{base + Palette, Entries * 32u}}, "pointer image table: the snapshot range is wrong");
+    require(TableCovered(memory.Regions(), root + Palette / 4u, Entries * 32u) && !TableTouched(memory.Regions(), root + (Palette + Entries * 32u) / 4u, Committed - Palette - Entries * 32u), "pointer image table: the captured regions are wrong");
+    masked.request.context.memory = memory.Regions();
+    const auto compiled = Recompile(masked.request, *capture);
+    const bool map = std::any_of(compiled->bindings.begin(), compiled->bindings.end(), [&](const DescriptorBinding& binding) { return binding.role == DescriptorRole::ImageTableMap && binding.guestDescriptor == tables.map; });
+    require(map && compiled->imageTableRanges.size() == 1u && compiled->imageTableRanges[0].first == base + Palette, "pointer image table: the compiled table is wrong");
+#if ANYPS5_ENABLE_SPIRV_TOOLS
+    static_cast<void>(ValidateAndOptimizeSpirv(compiled->spirv, masked.request.target.vulkanVersion, masked.request.target.spirvVersion));
+#endif
+
+    const std::vector<std::uint32_t> pointerCode{0xf4080200u, 0xfa000000u, 0xf4080700u, 0xfa000010u, 0xf4080800u, 0xfa000020u, 0xf4040500u, 0xfa000030u,
+        0x7e200500u, 0x8f108210u, 0xf4200444u, 0x20000000u, 0x8711ff11u, 0x000000ffu, 0x8f128511u, 0xf40c090au, 0x241fff00u, 0xf09c0f08u, 0x01090000u,
+        0xe0700000u, 0x80070000u, 0xbf810000u};
+    TableRequest loaded(pointerCode, root);
+    require(ColumnOf(*GetResourcePlan(loaded.request), 0).offset == 0xffffff00u, "pointer image table: a negative immediate was not kept");
+    AgcDriver::ShaderMemory loadedMemory({});
+    const auto loadedCapture = loadedMemory.Capture(loaded.request);
+    require(ViewCodes(loadedCapture->snapshot.tables, 0) == expected && loadedCapture->snapshot.tables.ranges == tables.ranges, "pointer image table: a base loaded from the SRT with a negative immediate snapshots other records");
+    root[12] = static_cast<std::uint32_t>(pointer) | 2u;
+    AgcDriver::ShaderMemory unalignedMemory({});
+    const auto unaligned = unalignedMemory.Capture(loaded.request);
+    const auto unalignedCodes = ViewCodes(unaligned->snapshot.tables, 0);
+    require(unalignedCodes.size() == Entries && std::all_of(unalignedCodes.begin(), unalignedCodes.end(), [&](std::uint32_t code) { return code == unalignedCodes[0]; }) && unaligned->snapshot.tables.poison.at(unalignedCodes[0] & ~Abi::PoisonFlag).reason == Abi::PoisonReason::Unmapped, "pointer image table: a pointer that is not dword-aligned was read");
+    root[12] = static_cast<std::uint32_t>(pointer);
+
+    const std::vector<std::uint32_t> directCode{0xf4080700u, 0xfa000010u, 0xf4080800u, 0xfa000020u, 0xf4000440u, 0xfa000038u, 0x8f128511u, 0xf40c0900u,
+        0x24000040u, 0xf09c0f08u, 0x01090000u, 0xe0700000u, 0x80070000u, 0xbf810000u};
+    root[14] = 2u;
+    TableRequest direct(directCode, root);
+    const auto directPlan = GetResourcePlan(direct.request);
+    require(directPlan->info.tableViews.empty() && directPlan->info.images.size() == 1u && directPlan->info.images[0].tableView == NoTableView, "pointer image table: a T# at an offset known at record time is not a direct binding");
+    AgcDriver::ShaderMemory directMemory({});
+    const auto directCapture = directMemory.Capture(direct.request);
+    require(directCapture->snapshot.images.size() == 1u && directCapture->snapshot.images[0].dwords[0] == root[(Palette + 2u * 32u) / 4u] && !TableTouched(directMemory.Regions(), root + (Palette + 3u * 32u) / 4u, Committed - Palette - 3u * 32u), "pointer image table: a T# at an offset known at record time read other records");
+    root[14] = 0u;
+
+    const std::vector<std::uint32_t> wideCode{0xf4080700u, 0xfa000010u, 0xf4080800u, 0xfa000020u, 0x7e220500u, 0x8f128511u, 0xf40c0900u, 0x24000040u,
+        0xf09c0f08u, 0x01090000u, 0xe0700000u, 0x80070000u, 0xbf810000u};
+    TableRequest wide(wideCode, root);
+    const auto widePlan = GetResourcePlan(wide.request);
+    require(ColumnOf(*widePlan, 0).maxKey == 0xffffffffu && !ColumnOf(*widePlan, 0).keyDomain.has_value(), "pointer image table: a lane key has a bound or a key domain");
+    AgcDriver::ShaderMemory wideMemory({});
+    const auto wideCapture = wideMemory.Capture(wide.request);
+    const auto wideCodes = ViewCodes(wideCapture->snapshot.tables, 0);
+    constexpr std::uint32_t mapped = (Committed - Palette) / 32u;
+    require(wideCodes.size() == Abi::MaxKeys && std::equal(expected.begin(), expected.end(), wideCodes.begin()) && wideCodes[mapped - 1u] == Abi::NullCode, "pointer image table: an unbounded key did not snapshot the capped records");
+    const auto unmapped = wideCodes[mapped];
+    require((unmapped & Abi::PoisonFlag) != 0u && wideCapture->snapshot.tables.poison.at(unmapped & ~Abi::PoisonFlag).reason == Abi::PoisonReason::Unmapped && wideCodes.back() == unmapped, "pointer image table: records past the mapping are not Unmapped poison");
+    require(!TableTouched(wideMemory.Regions(), root + Committed / 4u, Reserved - Committed), "pointer image table: an unmapped record was read");
+
+    auto narrowCode = maskedCode;
+    narrowCode.erase(narrowCode.begin() + 10, narrowCode.begin() + 12);
+    keys = {2u, 255u, 0x102u, 2u, 0u, 0u, 0u, 0u};
+    TableRequest narrow(narrowCode, root);
+    const auto narrowPlan = GetResourcePlan(narrow.request);
+    require(ColumnOf(*narrowPlan, 0).keyDomain.has_value() && ColumnOf(*narrowPlan, 0).maxKey == 0xffffffffu, "pointer image table: a key read from a V# has no key domain");
+    AgcDriver::ShaderMemory narrowMemory({});
+    const auto narrowCapture = narrowMemory.Capture(narrow.request);
+    const auto narrowCodes = ViewCodes(narrowCapture->snapshot.tables, 0);
+    const auto outsideDomain = narrowCodes.at(1);
+    require(narrowCodes.size() == Abi::MaxKeys && narrowCodes[0] == expected[0] && narrowCodes[2] == expected[2] && narrowCodes[255] == expected[255] && narrowCodes[0x102] == Abi::NullCode, "pointer image table: a record in the key domain was not resolved");
+    require((outsideDomain & Abi::PoisonFlag) != 0u && narrowCapture->snapshot.tables.poison.at(outsideDomain & ~Abi::PoisonFlag).reason == Abi::PoisonReason::OutsideDomain && narrowCodes[4] == outsideDomain && narrowCodes.back() == outsideDomain, "pointer image table: a record outside the key domain is not OutsideDomain poison");
+    require(!TableTouched(narrowMemory.Regions(), root + (Palette + 32u) / 4u, 32u) && !TableTouched(narrowMemory.Regions(), root + Committed / 4u, Reserved - Committed), "pointer image table: a record outside the key domain was read");
+    keys = {};
+#ifdef _WIN32
+    VirtualFree(block, 0, MEM_RELEASE);
+#else
+    munmap(block, Reserved);
+#endif
 }
 
 void verifyDescriptorPhis() {
@@ -1937,11 +2089,13 @@ int main() {
         verifyEvaluatedValues();
         verifyPureFlatSlots();
         verifyScalarBufferRule();
+        verifyScalarAddressRule();
         verifyImageTablePlans();
         verifyImageTableSnapshot();
         verifyImageTableCompare();
         verifyImageTableSrgb();
         verifyImageTableReduction();
+        verifyPointerImageTable();
         verifyDescriptorPhis();
         verifyProgramCounterRelativeData();
         verifyLanesOutsideHostSubgroup();

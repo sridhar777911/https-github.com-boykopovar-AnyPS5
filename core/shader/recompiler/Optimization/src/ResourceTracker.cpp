@@ -267,6 +267,21 @@ private:
         return memory.kind == ResourceKind::ScalarBuffer && memory.dataBits == 32u && memory.dataDwords == 1u ? &memory : nullptr;
     }
 
+    const MemoryInfo* ScalarAddressMemory(const IrValue& read, std::uint32_t& index) const {
+        if (read.Opcode() != IrOpcode::LoadAddressU32 || read.ArgumentCount() != 4u) {
+            return nullptr;
+        }
+        index = read.Flags<MemoryFlags>().index;
+        if (index >= m_program.Resources().memoryInfo.size()) {
+            return nullptr;
+        }
+        const auto& memory = m_program.Resources().memoryInfo[index];
+        std::uint32_t high = 0;
+        const IrValue* active = read.Argument(3)->Resolve();
+        const bool always = active->HasImmediate() && active->Type() == IrType::U1 && active->ImmediateBool();
+        return memory.kind == ResourceKind::ScalarAddress && !memory.addressIsFull && memory.dataBits == 32u && memory.dataDwords == 1u && immediateU32(read.Argument(2), high) && high == 0u && always ? &memory : nullptr;
+    }
+
     bool MemoryIndexBelongsTo(std::uint32_t index, const IrValue& owner) const {
         for (const auto& block : m_program.Blocks()) {
             for (const IrValue* inst : block->Instructions()) {
@@ -282,11 +297,11 @@ private:
         return true;
     }
 
-    bool MakeRuntimeBufferSource(const IrValue& handle, std::uint32_t& source, DescriptorSource& descriptor) {
-        if (handle.Opcode() != IrOpcode::GetBufferResource) {
+    bool MakeRuntimeSource(const IrValue& handle, IrOpcode expected, std::uint32_t width, std::uint32_t& source, DescriptorSource& descriptor) {
+        if (handle.Opcode() != expected) {
             return false;
         }
-        MakeSource(handle, 4u, false, false, descriptor);
+        MakeSource(handle, width, false, false, descriptor);
         std::uint32_t badDword = 0;
         if (!ValidateSource(descriptor, badDword)) {
             return false;
@@ -346,7 +361,7 @@ private:
         }
         DescriptorSource source;
         std::uint32_t sourceIndex = 0;
-        if (!MakeRuntimeBufferSource(*key->Argument(0)->Resolve(), sourceIndex, source)) {
+        if (!MakeRuntimeSource(*key->Argument(0)->Resolve(), IrOpcode::GetBufferResource, 4u, sourceIndex, source)) {
             return std::nullopt;
         }
         const auto bits = possibleU32Bits(key->Argument(1));
@@ -374,16 +389,19 @@ private:
         IrValue* heapHandle = nullptr;
         IrValue* offset = nullptr;
         std::uint32_t first = 0;
+        bool address = false;
         for (std::uint32_t dword = 0; dword < words; dword++) {
             IrValue* read = handle.Argument(dword)->Resolve();
             std::uint32_t memoryIndex = 0;
             const MemoryInfo* memory = ScalarReadMemory(*read, memoryIndex);
+            const bool addressRead = memory == nullptr && (memory = ScalarAddressMemory(*read, memoryIndex)) != nullptr;
             if (memory == nullptr || !MemoryIndexBelongsTo(memoryIndex, *read)) {
                 return false;
             }
             if (dword == 0u) {
                 first = memory->offset;
-            } else if (memory->offset != first + dword * static_cast<std::uint32_t>(sizeof(std::uint32_t))) {
+                address = addressRead;
+            } else if (addressRead != address || memory->offset != first + dword * static_cast<std::uint32_t>(sizeof(std::uint32_t))) {
                 return false;
             }
             IrValue* currentHandle = read->Argument(0)->Resolve();
@@ -399,6 +417,14 @@ private:
             plan.memory.push_back(memoryIndex);
             plan.reads.push_back(read);
         }
+        if (address) {
+            DescriptorSource direct;
+            MakeSource(handle, width, false, false, direct);
+            std::uint32_t badDword = 0;
+            if (ValidateSource(direct, badDword)) {
+                return false;
+            }
+        }
         IrValue* key = nullptr;
         std::uint32_t stride = 0;
         std::uint32_t addend = 0;
@@ -407,7 +433,7 @@ private:
         }
         DescriptorSource heapSource;
         std::uint32_t heapIndex = 0;
-        if (!MakeRuntimeBufferSource(*heapHandle, heapIndex, heapSource)) {
+        if (!MakeRuntimeSource(*heapHandle, address ? IrOpcode::GetAddressResource : IrOpcode::GetBufferResource, address ? 2u : 4u, heapIndex, heapSource)) {
             return false;
         }
         TableColumn column;
@@ -416,7 +442,9 @@ private:
         column.addend = addend;
         column.offset = first;
         column.dwordCount = words;
+        column.maxKey = possibleU32Bits(key);
         column.sampler = sampler;
+        column.address = address;
         column.keyDomain = MatchKeyDomain(key);
         DescriptorSource columnSource = heapSource;
         columnSource.tableColumn = column;

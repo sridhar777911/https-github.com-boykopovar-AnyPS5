@@ -1284,11 +1284,8 @@ TableWord EmitTableWord(SpirvValueEmitContext& ctx, const IrValue& inst, std::ui
     };
     const auto mapStart = field(ImageTableAbi::ViewMapStart);
     const auto keys = field(ImageTableAbi::ViewKeyCount);
-    const auto sizeLow = field(ImageTableAbi::ViewSizeLow);
-    const auto sizeHigh = field(ImageTableAbi::ViewSizeHigh);
     const auto baseLow = field(ImageTableAbi::ViewBaseLow);
     const auto baseHigh = field(ImageTableAbi::ViewBaseHigh);
-    const auto zeroCode = field(ImageTableAbi::ViewZeroCode);
     const auto relative = Binary(state, spv::OpISub, u32, offset, ConstantU32(state, column.addend));
     const auto record = Binary(state, spv::OpUDiv, u32, relative, ConstantU32(state, column.stride));
     const auto remainder = Binary(state, spv::OpISub, u32, relative, Binary(state, spv::OpIMul, u32, record, ConstantU32(state, column.stride)));
@@ -1296,12 +1293,29 @@ TableWord EmitTableWord(SpirvValueEmitContext& ctx, const IrValue& inst, std::ui
     const auto inMap = Binary(state, spv::OpLogicalAnd, boolean, aligned, Binary(state, spv::OpULessThan, boolean, record, keys));
     const auto index = Select(state, u32, inMap, Binary(state, spv::OpIAdd, u32, mapStart, record), ConstantU32(state, 0u));
     const auto mapped = LoadTableMap(state, index);
+    const auto addCarry = [&](std::uint32_t left, std::uint32_t right) {
+        const auto sum = state.module.AllocateId();
+        state.module.AddFunction(spv::OpIAddCarry, TypeU32Pair(state), sum, left, right);
+        return sum;
+    };
+    TableWord word;
+    if (column.address) {
+        word.code = Select(state, u32, inMap, mapped, ConstantU32(state, ImageTableAbi::PoisonCode(0u)));
+        const auto immediate = column.offset & ~3u;
+        const auto first = addCarry(baseLow, Binary(state, spv::OpBitwiseAnd, u32, offset, ConstantU32(state, ~3u)));
+        const auto second = addCarry(CompositeWord(state, first, 0u), ConstantU32(state, immediate));
+        const auto extension = ConstantU32(state, (immediate & 0x80000000u) != 0u ? 0xffffffffu : 0u);
+        word.addressLow = CompositeWord(state, second, 0u);
+        word.addressHigh = Binary(state, spv::OpIAdd, u32, Binary(state, spv::OpIAdd, u32, baseHigh, extension), Binary(state, spv::OpIAdd, u32, CompositeWord(state, first, 1u), CompositeWord(state, second, 1u)));
+        return word;
+    }
+    const auto sizeLow = field(ImageTableAbi::ViewSizeLow);
+    const auto sizeHigh = field(ImageTableAbi::ViewSizeHigh);
+    const auto zeroCode = field(ImageTableAbi::ViewZeroCode);
     const auto dword = EmitScalarBufferDword(state, offset, ConstantU32(state, column.offset), sizeLow, sizeHigh);
     const auto outside = Select(state, u32, dword.inRange, ConstantU32(state, ImageTableAbi::PoisonCode(0u)), zeroCode);
-    TableWord word;
     word.code = Select(state, u32, inMap, mapped, outside);
-    const auto low = state.module.AllocateId();
-    state.module.AddFunction(spv::OpIAddCarry, TypeU32Pair(state), low, baseLow, dword.byte);
+    const auto low = addCarry(baseLow, dword.byte);
     word.addressLow = CompositeWord(state, low, 0u);
     word.addressHigh = Binary(state, spv::OpIAdd, u32, baseHigh, CompositeWord(state, low, 1u));
     return word;

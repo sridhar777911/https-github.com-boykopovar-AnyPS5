@@ -86,6 +86,23 @@ constexpr std::optional<std::uint32_t> ScalarBufferDword(std::uint32_t offset, s
     return dword;
 }
 
+constexpr std::optional<std::uint64_t> ScalarAddressDword(std::uint64_t base, std::uint32_t offset, std::uint32_t immediate) {
+    const std::uint64_t first = base + (offset & ~3u);
+    if (first < base) return std::nullopt;
+    const std::int64_t delta = static_cast<std::int32_t>(immediate & ~3u);
+    const std::uint64_t magnitude = delta < 0 ? static_cast<std::uint64_t>(-delta) : static_cast<std::uint64_t>(delta);
+    if (delta < 0) return magnitude > first ? std::nullopt : std::optional<std::uint64_t>(first - magnitude);
+    return first + magnitude < first ? std::nullopt : std::optional<std::uint64_t>(first + magnitude);
+}
+
+constexpr std::uint32_t ScalarAddressRecords(std::uint32_t stride) {
+    return stride <= 1u ? 0xffffffffu * stride : 0xffffffffu / stride + 1u;
+}
+
+constexpr std::uint32_t KeyRecords(std::uint32_t maxKey, std::uint32_t stride) {
+    return maxKey != 0xffffffffu && static_cast<std::uint64_t>(maxKey) * stride <= 0xffffffffull ? maxKey + 1u : 0xffffffffu;
+}
+
 constexpr std::uint32_t ScalarBufferRecords(std::uint32_t addend, std::uint32_t stride, std::uint32_t immediate, std::uint64_t size) {
     const std::uint64_t start = static_cast<std::uint64_t>(addend) + immediate;
     const std::uint64_t rounded = (size + 3u) & ~std::uint64_t{3u};

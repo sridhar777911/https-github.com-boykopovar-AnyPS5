@@ -520,38 +520,63 @@ private:
         if (!active) {
             return records;
         }
-        const auto heap = EvaluateBuffer(column.heapSource);
-        if (heap.Type() != 0u) {
-            throw std::runtime_error("image table: the descriptor table V# has type " + std::to_string(heap.Type()) + ", not a buffer");
+        if (column.address) {
+            DescriptorValue pointer;
+            walker.EvaluateDescriptorSource(plan, column.heapSource, runtime, pointer);
+            records.base = (static_cast<std::uint64_t>(pointer.dwords[1]) << 32u) | pointer.dwords[0];
+            records.records = ImageTableAbi::ScalarAddressRecords(column.stride);
+        } else {
+            const auto heap = EvaluateBuffer(column.heapSource);
+            if (heap.Type() != 0u) {
+                throw std::runtime_error("image table: the descriptor table V# has type " + std::to_string(heap.Type()) + ", not a buffer");
+            }
+            records.base = heap.Base48();
+            records.size = heap.GetSize();
+            records.records = ImageTableAbi::ScalarBufferRecords(column.addend, column.stride, column.offset, records.size);
+            tables.ranges.push_back({records.base, records.size});
         }
-        records.base = heap.Base48();
-        records.size = heap.GetSize();
-        records.records = ImageTableAbi::ScalarBufferRecords(column.addend, column.stride, column.offset, records.size);
+        records.records = std::min(records.records, ImageTableAbi::KeyRecords(column.maxKey, column.stride));
         records.keys = std::min(records.records, ImageTableAbi::MaxKeys);
-        tables.ranges.push_back({records.base, records.size});
         records.states.assign(records.keys, RecordState::Read);
         if (column.keyDomain.has_value() && records.keys != 0u) {
             Narrow(column, records);
         }
         records.words.assign(records.keys, DescriptorValue{});
+        std::uint64_t low = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t high = 0;
         for (std::uint32_t record = 0; record < records.keys; record++) {
             if (records.states[record] != RecordState::Read) continue;
             auto& value = records.words[record];
             value.dwordCount = column.sampler ? 4u : 8u;
             const auto offset = column.addend + record * column.stride;
             for (std::uint32_t dword = 0; dword < column.dwordCount; dword++) {
-                const auto position = ImageTableAbi::ScalarBufferDword(offset, column.offset + dword * 4u, records.size);
-                if (!position.has_value()) continue;
-                const auto address = records.base + *position;
-                if (!Accessible(address, sizeof(std::uint32_t))) {
+                std::optional<std::uint64_t> address;
+                if (column.address) {
+                    address = ImageTableAbi::ScalarAddressDword(records.base, offset, column.offset + dword * 4u);
+                    if (address.has_value() && (*address & 3u) != 0u) address.reset();
+                } else if (const auto position = ImageTableAbi::ScalarBufferDword(offset, column.offset + dword * 4u, records.size); position.has_value()) {
+                    address = records.base + *position;
+                } else {
+                    continue;
+                }
+                if (!address.has_value() || !Accessible(*address, sizeof(std::uint32_t))) {
                     records.states[record] = RecordState::Unmapped;
                     value = DescriptorValue{};
                     break;
                 }
-                value.dwords[dword] = Read(address);
+                value.dwords[dword] = Read(*address);
+                low = std::min(low, *address);
+                high = std::max(high, *address + sizeof(std::uint32_t));
             }
         }
+        if (column.address && low < high) tables.ranges.push_back({low, high - low});
         return records;
+    }
+
+    std::uint64_t RecordAddress(const TableColumn& column, const ColumnRecords& records, std::uint32_t record) const {
+        const auto offset = column.addend + record * column.stride;
+        if (column.address) return ImageTableAbi::ScalarAddressDword(records.base, offset, column.offset).value_or(0u);
+        return records.base + ((offset + column.offset) & ~3u);
     }
 
     using WordsKey = std::pair<std::array<std::uint32_t, 8>, std::uint32_t>;
@@ -615,7 +640,7 @@ private:
         const auto imageView = tableViewTemplate(view, viewIndex);
         TableTrace trace{records.base, records.size, records.records, records.keys, 0u, 0u, records.narrowed};
         for (std::uint32_t record = 0; record < records.keys; record++) {
-            const auto address = records.base + ((column.addend + record * column.stride + column.offset) & ~3u);
+            const auto address = RecordAddress(column, records, record);
             std::uint32_t code = ImageTableAbi::NullCode;
             if (records.states[record] == RecordState::OutsideDomain) {
                 code = Poison(viewIndex, 0u, {}, PoisonReason::OutsideDomain);
