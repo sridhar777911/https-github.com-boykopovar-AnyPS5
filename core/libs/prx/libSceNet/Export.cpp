@@ -911,10 +911,4 @@ int APS5_VABI sceNetResolverStartAton(int rid, const void* addr, char* hostname,
     }
     return 0;
 }
-
-APS5_EXPORT("TCkRD0DWNLg", sceNetUnknown00);
-int APS5_VABI sceNetUnknown00(void) {
-    NotImplemented_nid_no_patch("TCkRD0DWNLg");
-    return 0;
-}
 }
