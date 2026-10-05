@@ -747,4 +747,24 @@ int APS5_VABI sceJson2Unknown00(void) {
     NotImplemented_nid_no_patch("6i18OJSvFWk");
     return 0;
 }
+
+int APS5_VABI _ZN3sce4Json14InitParameter217setFileBufferSizeEm(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI _ZN3sce4Json14InitParameter2C2Ev(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI _ZN3sce4Json11Initializer10initializeEPKNS0_14InitParameter2E(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI _ZN3sce4Json18InitParameterRtti216setAllocatorRttiEPNS0_14AllocParamRttiEPv(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
 }

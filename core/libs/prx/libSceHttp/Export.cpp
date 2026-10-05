@@ -294,4 +294,14 @@ int APS5_VABI sceHttpGetLastErrno(int request_id, int* errno_out) {
     *errno_out = 0;
     return 0;
 }
+
+int APS5_VABI sceHttpParseStatusLine(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceHttpAbortWaitRequest(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
 }
