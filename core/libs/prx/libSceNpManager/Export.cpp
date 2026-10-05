@@ -191,4 +191,8 @@ int APS5_VABI sceNpUnregisterPremiumEventCallback(void) {
     return 0;
 }
 
+int APS5_VABI sceNpUnregisterNpReachabilityStateCallback(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
 }
