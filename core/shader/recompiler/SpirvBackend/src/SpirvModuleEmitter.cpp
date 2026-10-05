@@ -946,7 +946,7 @@ void EmitProgram(SpirvEmitterState& state) {
         const bool demoteExtension = std::find(state.supportedExtensions.begin(), state.supportedExtensions.end(), "SPV_EXT_demote_to_helper_invocation") != state.supportedExtensions.end();
         const bool demote = demoteCapability && (demoteCore || demoteExtension);
         if (!demote && state.requirements.neighbourLaneReads) {
-            throw std::runtime_error("the PA_SC_AA_MASK quad pixel mask " + std::to_string(mask) + " leaves helper pixels whose lanes the pixel program reads (implicit-LOD sampling or cross-lane reads), which needs the device's shaderDemoteToHelperInvocation");
+            throw std::runtime_error("the PA_SC_AA_MASK quad pixel mask " + std::to_string(mask) + " leaves helper pixels whose lanes the pixel program reads (implicit-LOD sampling, whole-quad mode or cross-lane reads), which needs the device's shaderDemoteToHelperInvocation");
         }
         const auto uncovered = state.module.AllocateId();
         state.module.AddFunction(spv::OpIEqual, TypeBool(state), uncovered, bit, ConstantU32(state, 0u));

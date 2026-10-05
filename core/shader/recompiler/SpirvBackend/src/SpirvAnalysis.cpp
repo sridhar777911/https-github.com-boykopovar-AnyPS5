@@ -19,6 +19,7 @@ bool ReadsNeighbourLanes(const IrProgram& program, const IrValue& inst) {
     case IrOpcode::BpermuteU32:
     case IrOpcode::Permlane16U32:
     case IrOpcode::ReadLane:
+    case IrOpcode::WqmU64:
         return true;
     case IrOpcode::ImageSampleImplicitLod:
     case IrOpcode::ImageSampleRaw: {
