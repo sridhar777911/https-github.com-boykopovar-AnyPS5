@@ -1,5 +1,9 @@
 # Relinker usage
 
+## Release archives
+
+Release assets named `anyps5-windows-<tag>.zip` and `anyps5-linux-<tag>.tar.gz` contain the relinker, system libraries, user documentation, and a build manifest. Extract the archive and write the converted executable into its root so the included `libs/` directory remains beside it. Verify downloaded assets against `SHA256SUMS.txt` from the same release.
+
 ## Input and conversion
 
 Use a clean ELF executable. Place its bundled ELF modules in `sce_module/`, `sce_modules/`, or `prx/` beside the input executable. `prx/` can coexist with either `sce_module/` or `sce_modules/`. Both `sce_module/` and `sce_modules/` present, or all three absent, is an error.
