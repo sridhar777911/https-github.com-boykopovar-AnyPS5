@@ -98,7 +98,11 @@ IrProgram PrepareResourceProgram(const RecompileRequest& request) {
     const auto decoded = decoder.Decode(request.shader.code);
 
     constexpr GraphBuilder graphBuilder;
-    auto cfg = graphBuilder.Build(decoded);
+    SwappcInfo swappcInfo;
+    swappcInfo.fetchCallAllowed = inputInfo.vertex != nullptr;
+    swappcInfo.userDataBaseRegister = request.context.userDataBaseRegister;
+    swappcInfo.userDataCount = static_cast<std::uint32_t>(request.context.userData.size());
+    auto cfg = graphBuilder.Build(decoded, &swappcInfo);
 
     constexpr Structurizer structurizer;
     structurizer.Structurize(cfg);

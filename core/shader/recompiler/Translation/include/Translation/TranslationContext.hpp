@@ -272,6 +272,7 @@ private:
     void sTtracedata();
     void sInstPrefetch();
     void sGetpcB64(const RdnaInstruction& inst);
+    void sSwappcB64(const RdnaInstruction& inst);
     void sCselectB32(const RdnaInstruction& inst);
     void scalarSelect64(const RdnaInstruction& inst, const RdnaOperand& falseSource);
     void movB32(const RdnaInstruction& inst, bool applyFloatModifiers);

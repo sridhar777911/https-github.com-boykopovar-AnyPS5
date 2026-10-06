@@ -29,6 +29,9 @@ bool TranslationContext::emitScalar(const RdnaInstruction& inst) {
         return true;
     case RdnaOpcode::SSetpcB64:
         return true;
+    case RdnaOpcode::SSwappcB64:
+        sSwappcB64(inst);
+        return true;
     case RdnaOpcode::SSubvectorLoopBegin:
         sSubvectorLoop(inst, true);
         return true;
