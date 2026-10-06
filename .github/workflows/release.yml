@@ -33,8 +33,11 @@ jobs:
           - platform: windows
             runner: windows-latest
             timeout: 45
+            ssl_cert_file: 'C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
+    env:
+      SSL_CERT_FILE: ${{ matrix.ssl_cert_file }}
     defaults:
       run:
         shell: bash
@@ -58,6 +61,9 @@ jobs:
         with:
           key: ${{ matrix.platform }}
           save: false
+      - name: Install lavapipe for the GPU execution tests
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvulkan1 mesa-vulkan-drivers
       - name: Configure Linux
         if: matrix.platform == 'linux'
         run: cmake -S . -B build $CONFIGURE
@@ -72,9 +78,13 @@ jobs:
         if: matrix.platform == 'windows'
         shell: cmd
         run: cmake --build build
+      # PR CI (build.yml) uses --repeat until-fail:3; release runs tests once.
       - name: Run tests (Linux)
         if: matrix.platform == 'linux'
         run: ctest --test-dir build --output-on-failure --timeout 120 --stop-on-failure --no-tests=error
+        env:
+          ANYPS5_REQUIRE_VULKAN: 1
+          GALLIUM_OVERRIDE_CPU_CAPS: avx
       - name: Run tests (Windows)
         if: matrix.platform == 'windows'
         shell: cmd
