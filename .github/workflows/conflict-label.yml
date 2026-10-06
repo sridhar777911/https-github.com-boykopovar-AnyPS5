@@ -18,4 +18,4 @@ jobs:
       - uses: eps1lon/actions-label-merge-conflict@v3
         with:
           dirtyLabel: needs rebase
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          repoToken: ${{ github.token }}
