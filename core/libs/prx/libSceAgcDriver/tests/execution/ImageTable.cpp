@@ -120,6 +120,51 @@ alignas(256) constexpr std::array<std::uint32_t, 28> UnboundedPointerCode{
     0x34101084u, 0xe0781000u, 0x80070408u, 0xbf810000u,
 };
 
+alignas(256) constexpr std::array<std::uint32_t, 23> ReadTableCode{
+    0xf4080100u, 0xfa000000u, 0xf4080200u, 0xfa000010u, 0xf4080700u, 0xfa000020u, 0x8f108202u, 0xf4200444u,
+    0x20000000u, 0x9312b011u, 0xf42c0802u, 0x24000000u, 0x360200bfu, 0x7e040280u, 0xf0008f08u, 0x00090401u,
+    0x7e120202u, 0x34101286u, 0x4a101100u, 0x34101084u, 0xe0781000u, 0x80070408u, 0xbf810000u,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 25> ReadTableCutCode{
+    0xf4080100u, 0xfa000000u, 0xf4080200u, 0xfa000010u, 0xf4080700u, 0xfa000020u, 0x8f108202u, 0xf4200444u,
+    0x20000000u, 0x9312b011u, 0xf42c0802u, 0x24000000u, 0x360200bfu, 0x7e040280u, 0x7da400ffu, 0x00001000u,
+    0xf0008f08u, 0x00090401u, 0x7e120202u, 0x34101286u, 0x4a101100u, 0x34101084u, 0xe0781000u, 0x80070408u,
+    0xbf810000u,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 23> ReadTableD16Code{
+    0xf4080100u, 0xfa000000u, 0xf4080200u, 0xfa000010u, 0xf4080700u, 0xfa000020u, 0x8f108202u, 0xf4200444u,
+    0x20000000u, 0x9312b011u, 0xf42c0802u, 0x24000000u, 0x360200bfu, 0x7e040280u, 0xf000a388u, 0x80090401u,
+    0x7e120202u, 0x34101286u, 0x4a101100u, 0x34101084u, 0xe0701000u, 0x80070408u, 0xbf810000u,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 27> ReadTableWave32Code{
+    0xf4080100u, 0xfa000000u, 0xf4080200u, 0xfa000010u, 0xf4080700u, 0xfa000020u, 0x7e200500u, 0x90108510u,
+    0x8f118202u, 0x81101110u, 0x8f108210u, 0xf4200444u, 0x20000000u, 0x9312b011u, 0xf42c0802u, 0x24000000u,
+    0x360200bfu, 0x7e040280u, 0xf0008f08u, 0x00090401u, 0x7e120202u, 0x34101287u, 0x4a101100u, 0x34101084u,
+    0xe0781000u, 0x80070408u, 0xbf810000u,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 17> ReadDirectCode{
+    0xf4080700u, 0xfa000020u, 0xf4080800u, 0xfa000030u, 0xf4080900u, 0xfa000040u, 0x360200bfu, 0x7e040280u,
+    0xf0008f08u, 0x00090401u, 0x7e120202u, 0x34101286u, 0x4a101100u, 0x34101084u, 0xe0781000u, 0x80070408u,
+    0xbf810000u,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 17> ReadDirectD16Code{
+    0xf4080700u, 0xfa000020u, 0xf4080800u, 0xfa000030u, 0xf4080900u, 0xfa000040u, 0x360200bfu, 0x7e040280u,
+    0xf000a388u, 0x80090401u, 0x7e120202u, 0x34101286u, 0x4a101100u, 0x34101084u, 0xe0701000u, 0x80070408u,
+    0xbf810000u,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 25> ReadPointerCode{
+    0xf4080200u, 0xfa000000u, 0xf4080700u, 0xfa000010u, 0xf4080800u, 0xfa000020u, 0x8f108202u, 0xf4200444u,
+    0x20000000u, 0x8711ff11u, 0x000000ffu, 0x8f128511u, 0xf40c0900u, 0x24000040u, 0x360200bfu, 0x7e040280u,
+    0xf0000f08u, 0x00090401u, 0x7e120202u, 0x34101286u, 0x4a101100u, 0x34101084u, 0xe0781000u, 0x80070408u,
+    0xbf810000u,
+};
+
 constexpr std::array<std::uint32_t, 4> PointClamp{0x92u, (4u * 256u) << 12u, 0u, 0u};
 constexpr std::array<std::uint32_t, 4> LinearWrap{0u, (4u * 256u) << 12u, (1u << 20u) | (1u << 22u), 0u};
 constexpr std::array<std::uint32_t, 4> PointWrap{0u, (4u * 256u) << 12u, 1u << 24u, 0u};
@@ -139,6 +184,11 @@ void SetRecord(std::uint32_t record, const std::array<std::uint32_t, 4>& sampler
     std::fill(words, words + Stride / 4u, 0u);
     std::copy(sampler.begin(), sampler.end(), words);
     std::copy(image.begin(), image.end(), words + 4);
+}
+
+std::uint32_t Half(float value) {
+    const auto bits = std::bit_cast<std::uint32_t>(value);
+    return (((bits >> 23u) - 112u) << 10u) | ((bits >> 13u) & 0x3ffu);
 }
 
 std::string Hex(std::uint32_t value) {
@@ -322,6 +372,29 @@ void RequireRed(const Outcome& outcome, std::uint32_t group, std::uint32_t threa
     }
 }
 
+template <std::size_t CodeWords>
+void RunWaveKeys(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, CodeWords>& code, const std::string& what) {
+    if (device.Target().subgroupSize != 32u) {
+        std::printf("%s: per-wave key case skipped, subgroup size %u does not hold exactly one wave32\n", what.c_str(), device.Target().subgroupSize);
+        return;
+    }
+    for (std::uint32_t wave = 0; wave < 8; ++wave) Keys[wave] = wave % 3u;
+    const auto waves = Run(device, code, 2, 128, 32);
+    Require(!Faulted(waves), what + ": per-wave keys faulted:\n" + waves.log);
+    for (std::uint32_t group = 0; group < 2; ++group) {
+        for (std::uint32_t wave = 0; wave < 4; ++wave) {
+            const auto key = (group * 4u + wave) % 3u;
+            for (std::uint32_t lane = 0; lane < 32; ++lane) {
+                const auto thread = wave * 32u + lane;
+                const auto actual = waves.words[(group * 128u + thread) * 4u];
+                const auto x = thread % Width;
+                const auto expected = key == 0u ? std::bit_cast<std::uint32_t>(FloatTexels[x]) : key == 1u ? UintTexels[x] : static_cast<std::uint32_t>(SintTexels[x]);
+                Require(actual == expected, what + ": wave " + std::to_string(wave) + " of group " + std::to_string(group) + " read the wrong entry at lane " + std::to_string(lane));
+            }
+        }
+    }
+}
+
 void RunTests(AgcDriver::VulkanDevice& device) {
     Fill();
     const auto floatImage = Image(FloatTexels.data(), Format32Float);
@@ -479,25 +552,83 @@ void RunTests(AgcDriver::VulkanDevice& device) {
     RequireRed(tableSampler, 0, Lanes, [](std::uint32_t x) { return UintTexels[x]; }, "direct uint texels through a linear table sampler");
     RequireRed(tableSampler, 1, Lanes, [](std::uint32_t x) { return UintTexels[x]; }, "direct uint texels through a point table sampler");
 
-    if (device.Target().subgroupSize == 32u) {
-        for (std::uint32_t wave = 0; wave < 8; ++wave) Keys[wave] = wave % 3u;
-        const auto waves = Run(device, TableWave32Code, 2, 128, 32);
-        Require(!Faulted(waves), "image table: per-wave keys faulted:\n" + waves.log);
-        for (std::uint32_t group = 0; group < 2; ++group) {
-            for (std::uint32_t wave = 0; wave < 4; ++wave) {
-                const auto key = (group * 4u + wave) % 3u;
-                for (std::uint32_t lane = 0; lane < 32; ++lane) {
-                    const auto thread = wave * 32u + lane;
-                    const auto actual = waves.words[(group * 128u + thread) * 4u];
-                    const auto x = thread % Width;
-                    const auto expected = key == 0u ? std::bit_cast<std::uint32_t>(FloatTexels[x]) : key == 1u ? UintTexels[x] : static_cast<std::uint32_t>(SintTexels[x]);
-                    Require(actual == expected, "image table: wave " + std::to_string(wave) + " of group " + std::to_string(group) + " sampled the wrong entry at lane " + std::to_string(lane));
-                }
-            }
-        }
-    } else {
-        std::printf("per-wave key case skipped, subgroup size %u does not hold exactly one wave32\n", device.Target().subgroupSize);
+    RunWaveKeys(device, TableWave32Code, "image table");
+}
+
+template <std::size_t CodeWords>
+Outcome RunReadDirect(AgcDriver::VulkanDevice& device, const std::array<std::uint32_t, CodeWords>& code, const std::array<std::uint32_t, 4>& image) {
+    std::copy(PointClamp.begin(), PointClamp.end(), Srt.begin() + 12);
+    std::copy(image.begin(), image.end(), Srt.begin() + 16);
+    return Run(device, code, 1, Lanes, 64);
+}
+
+void RunReadTests(AgcDriver::VulkanDevice& device) {
+    const auto floatImage = Image(FloatTexels.data(), Format32Float);
+    const auto uintImage = Image(UintTexels.data(), Format32UInt);
+    const auto sintImage = Image(SintTexels.data(), Format32SInt);
+    SetRecord(0, PointClamp, floatImage);
+    SetRecord(1, PointClamp, uintImage);
+    SetRecord(2, PointClamp, sintImage);
+    SetRecord(3, LinearWrap, floatImage);
+    SetRecord(6, {0u, 0u, 0u, 0u}, {0u, 0u, 0u, 0u});
+    SetRecord(7, PointClamp, {0x1234u, 0x5678u, 0x9abcu, 0x0000ffacu});
+    Keys = {};
+    const std::array<std::uint32_t, 5> keys{0u, 1u, 2u, 3u, 6u};
+    std::copy(keys.begin(), keys.end(), Keys.begin());
+    const auto reads = Run(device, ReadTableCode, 5, Lanes, 64);
+    Require(!Faulted(reads), "image table read: valid entries faulted:\n" + reads.log);
+    for (std::uint32_t group = 0; group < 4; ++group) {
+        const auto* words = Table.data() + keys[group] * (Stride / 4u);
+        const auto control = RunReadDirect(device, ReadDirectCode, {words[4], words[5], words[6], words[7]});
+        Require(Group(reads, group) == Group(control, 0), "image table read: record " + std::to_string(keys[group]) + " differs from the direct binding of the same words");
     }
+    RequireRed(reads, 0, Lanes, [](std::uint32_t x) { return std::bit_cast<std::uint32_t>(FloatTexels[x]); }, "image table read: float texels");
+    RequireRed(reads, 1, Lanes, [](std::uint32_t x) { return UintTexels[x]; }, "image table read: uint texels");
+    RequireRed(reads, 2, Lanes, [](std::uint32_t x) { return static_cast<std::uint32_t>(SintTexels[x]); }, "image table read: sint texels");
+    const auto nullGroup = Group(reads, 4);
+    Require(std::all_of(nullGroup.begin(), nullGroup.end(), [](std::uint32_t word) { return word == 0u; }), "image table read: a null entry did not read zeros");
+
+    Keys[0] = 7;
+    const auto cut = Run(device, ReadTableCutCode, 1, Lanes, 64);
+    Require(!Faulted(cut), "image table read: an invalid entry read with EXEC clear faulted:\n" + cut.log);
+    const auto selected = Run(device, ReadTableCode, 1, Lanes, 64);
+    Require(Faulted(selected) && selected.log.find("not an image") != std::string::npos && selected.log.find("00001234") != std::string::npos, "image table read: an invalid entry read with EXEC set did not report its words and reason:\n" + selected.log);
+
+    Keys = {};
+    Keys[1] = 1u;
+    const auto halves = Run(device, ReadTableD16Code, 2, Lanes, 64);
+    Require(!Faulted(halves), "image table d16 read: valid entries faulted:\n" + halves.log);
+    for (std::uint32_t group = 0; group < 2; ++group) {
+        const auto* words = Table.data() + group * (Stride / 4u);
+        const auto control = RunReadDirect(device, ReadDirectD16Code, {words[4], words[5], words[6], words[7]});
+        Require(Group(halves, group) == Group(control, 0), "image table d16 read: record " + std::to_string(group) + " differs from the direct binding of the same words");
+    }
+    RequireRed(halves, 0, Lanes, [](std::uint32_t x) { return Half(FloatTexels[x]); }, "image table d16 read: float texels");
+    RequireRed(halves, 1, Lanes, [](std::uint32_t x) { return UintTexels[x] & 0xffffu; }, "image table d16 read: uint texels");
+
+    RunWaveKeys(device, ReadTableWave32Code, "image table read");
+
+    std::fill(Root.begin(), Root.end(), 0u);
+    SetEntry(0, floatImage);
+    SetEntry(1, uintImage);
+    SetEntry(2, sintImage);
+    SetEntry(255, uintImage);
+    const std::array<std::uint32_t, 5> pointerKeys{0u, 1u, 2u, 3u, 0x1ffu};
+    Keys = {};
+    std::copy(pointerKeys.begin(), pointerKeys.end(), Keys.begin());
+    const auto pointer = RunPointer(device, ReadPointerCode, 5);
+    Require(!Faulted(pointer), "pointer image table read: valid entries faulted:\n" + pointer.log);
+    for (std::uint32_t group = 0; group < pointerKeys.size(); ++group) {
+        const auto* words = Root.data() + (PaletteOffset + (pointerKeys[group] & 0xffu) * 32u) / 4u;
+        if (std::all_of(words, words + 8, [](std::uint32_t word) { return word == 0u; })) {
+            const auto zeros = Group(pointer, group);
+            Require(std::all_of(zeros.begin(), zeros.end(), [](std::uint32_t word) { return word == 0u; }), "pointer image table read: a null entry did not read zeros");
+            continue;
+        }
+        const auto control = RunReadDirect(device, ReadDirectCode, {words[0], words[1], words[2], words[3]});
+        Require(Group(pointer, group) == Group(control, 0), "pointer image table read: key " + Hex(pointerKeys[group]) + " differs from the direct binding of its masked entry");
+    }
+    RequireRed(pointer, 4, Lanes, [](std::uint32_t x) { return UintTexels[x]; }, "pointer image table read: key 0x1ff masked to entry 255");
 }
 
 void RunPointerTests(AgcDriver::VulkanDevice& device) {
@@ -565,6 +696,7 @@ int main() {
         if (!device) return VulkanTestSkipped;
         RunTests(*device);
         RunPointerTests(*device);
+        RunReadTests(*device);
         std::puts("image table tests passed");
         return 0;
     } catch (const std::exception& error) {

@@ -758,9 +758,9 @@ private:
                     continue;
                 }
                 const auto op = inst->Opcode();
-                const bool sampling = op == IrOpcode::ImageSampleRaw || op == IrOpcode::ImageGatherRaw || op == IrOpcode::ImageQueryLod || op == IrOpcode::ImageQueryDimensions;
-                if (!sampling || imageInfo.resourceClass != ImageResourceClass::Sampled || imageInfo.access != ImageAccess::Read || memory.imagePacked) {
-                    fail("image table: " + std::string(IrOpcodeName(op)) + " at pc 0x" + formatHex32(flags.pc) + " takes its descriptor from a table; only samples, gathers and queries can");
+                const bool readOnly = op == IrOpcode::ImageRead || op == IrOpcode::ImageSampleRaw || op == IrOpcode::ImageGatherRaw || op == IrOpcode::ImageQueryLod || op == IrOpcode::ImageQueryDimensions;
+                if (!readOnly || imageInfo.resourceClass != ImageResourceClass::Sampled || imageInfo.access != ImageAccess::Read || memory.imagePacked) {
+                    fail("image table: " + std::string(IrOpcodeName(op)) + " at pc 0x" + formatHex32(flags.pc) + " takes its descriptor from a table; only reads, samples, gathers and queries can");
                 }
             }
         }

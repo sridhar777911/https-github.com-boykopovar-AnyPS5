@@ -852,12 +852,12 @@ std::uint32_t QueryLodValue(SpirvValueEmitContext& ctx, const ImageEmitAccess& a
     return result;
 }
 
-void EmitReadOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
+std::uint32_t ReadValue(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
     auto& state = ctx.state;
     const auto& dimensionInfo = RdnaImageDimensionInfoFor(access.image.dimension);
     const auto numericClass = access.image.numericClass;
     const auto condition = ctx.Arg(access.inst, 2);
-    ctx.Define(access.inst, EmitValueOrDefaultIfCondition(state, condition, TypeU32Vector(state, 4), ConstantU32CompositeZero(state, 4), [&]() {
+    return EmitValueOrDefaultIfCondition(state, condition, TypeU32Vector(state, 4), ConstantU32CompositeZero(state, 4), [&]() {
         const auto descriptor = AccessImage(state, access);
         const auto color = state.module.AllocateId();
         const auto coord = CoordU32(ctx, access);
@@ -874,7 +874,7 @@ void EmitReadOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
             return PackedImageTexel(ctx, access, color);
         }
         return ResultVector(ctx, access, UnpackImageTexel(ctx, access, color), numericClass, false, false);
-    }));
+    });
 }
 
 void EmitWriteOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
@@ -1240,6 +1240,8 @@ std::uint32_t ReadOnlyValue(SpirvValueEmitContext& ctx, const ImageEmitAccess& a
         case IrOpcode::ImageSampleRaw:
         case IrOpcode::ImageGatherRaw:
             return SamplingValue(ctx, access);
+        case IrOpcode::ImageRead:
+            return ReadValue(ctx, access);
         default:
             ctx.Fail(access.inst, "has no image table emitter");
     }
@@ -1492,10 +1494,8 @@ void EmitImage(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::ImageQueryLod:
         case IrOpcode::ImageSampleRaw:
         case IrOpcode::ImageGatherRaw:
-            ctx.Define(inst, ReadOnlyValue(ctx, access));
-            return;
         case IrOpcode::ImageRead:
-            EmitReadOp(ctx, access);
+            ctx.Define(inst, ReadOnlyValue(ctx, access));
             return;
         case IrOpcode::ImageWrite:
             EmitWriteOp(ctx, access);

@@ -350,6 +350,10 @@ void verifyImageTablePlans() {
     const auto affine = plan({0xf4080100u, 0xfa000000u, 0xf4080200u, 0xfa000010u, 0xf4080700u, 0xfa000030u, 0x7e200500u, 0x93109010u,
         0x81108810u, 0xf4280502u, 0x20000000u, 0xf09c8f08u, 0x00450000u, 0xe0700000u, 0x80070000u, 0xbf810000u});
     require(affine->info.tableViews.size() == 1u && ColumnOf(*affine, 0).stride == 16u && ColumnOf(*affine, 0).addend == 8u && ColumnOf(*affine, 0).dwordCount == 4u, "image table: key * 16 + 8 was not planned");
+    const auto load = plan({0xf4080100u, 0xfa000000u, 0xf4080700u, 0xfa000030u, 0x7e200500u, 0x93109010u, 0x81108810u, 0xf4280502u,
+        0x20000000u, 0xf0008f08u, 0x00050000u, 0xe0700000u, 0x80070000u, 0xbf810000u});
+    require(load->info.tableViews.size() == 1u && !load->info.tableViews[0].sampler && load->info.tableViews[0].r128 && load->info.tableViews[0].dimension == RdnaImageDimension::Dim2D, "image table: image_load through key * 16 + 8 has no image view");
+    require(ColumnOf(*load, 0).stride == 16u && ColumnOf(*load, 0).addend == 8u && ColumnOf(*load, 0).dwordCount == 4u && !ColumnOf(*load, 0).sampler && load->info.usesFaultBuffer, "image table: image_load through key * 16 + 8 was not planned");
 
     const auto failing = [&](std::vector<std::uint32_t> code, const char* expected, const char* message) {
         TableRequest table(std::move(code), srt.data());
