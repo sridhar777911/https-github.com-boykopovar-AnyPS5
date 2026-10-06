@@ -8,6 +8,10 @@
 // absolute address and breaks on host addresses outside that range.
 namespace GuestArena {
 
+#ifndef _WIN32
+using SharedBackingResolver = bool (*)(std::uintptr_t address, std::size_t bytes, int* file, std::uint64_t* offset);
+#endif
+
 extern "C" {
 
 bool GuestArenaAvailable_nid_postfix();
@@ -30,6 +34,9 @@ void GuestArenaReset_nid_postfix(void* pointer, std::size_t bytes);
 void GuestArenaMap_nid_postfix(void* pointer, std::size_t bytes, void* section, std::uint64_t offset, std::uint32_t protection);
 void* GuestArenaMapAlias_nid_postfix(std::uintptr_t address, std::size_t bytes);
 void GuestArenaUnmapAlias_nid_postfix(void* alias);
+#else
+void GuestArenaSetSharedBacking_nid_postfix(SharedBackingResolver resolver);
+bool GuestArenaSharedBacking_nid_postfix(std::uintptr_t address, std::size_t bytes, int* file, std::uint64_t* offset);
 #endif
 bool GuestArenaBeginHostWrite_nid_postfix(void* pointer, std::size_t bytes);
 void GuestArenaEndHostWrite_nid_postfix(void* pointer, std::size_t bytes);

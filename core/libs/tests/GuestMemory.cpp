@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 #if defined(__linux__)
+#include <fcntl.h>
 #include <fstream>
 #include <string>
 #include <sys/mman.h>
@@ -745,6 +746,48 @@ static void CheckDirectMemoryBackingNeedsNoFilesystem() {
     Require(sceKernelReleaseDirectMemory(phys, page) == 0);
 }
 
+static void CheckDirectMemorySharedBacking() {
+    constexpr std::size_t page = 0x4000;
+    std::int64_t phys = 0;
+    Require(sceKernelAllocateDirectMemory(0, 0x7fffffffffll, page * 3, 0, 0, &phys) == 0);
+    void* first = nullptr;
+    Require(sceKernelMapDirectMemory(&first, page * 2, 3, 0, phys + page, 0) == 0);
+    const auto address = reinterpret_cast<std::uintptr_t>(first);
+    static_cast<volatile unsigned char*>(first)[page + 5] = 0x5a;
+    int file = -1;
+    std::uint64_t offset = 0;
+    Require(GuestArena::GuestArenaSharedBacking_nid_postfix(address + page, page, &file, &offset));
+    Require(offset == page * 2);
+    unsigned char byte = 0;
+    Require(pread(file, &byte, 1, static_cast<off_t>(offset + 5)) == 1 && byte == 0x5a);
+    const int seals = fcntl(file, F_GET_SEALS);
+    Require(seals >= 0 && (seals & F_SEAL_SHRINK) != 0 && (seals & F_SEAL_GROW) != 0);
+    Require((fcntl(file, F_GETFD) & FD_CLOEXEC) != 0);
+    close(file);
+    Require(GuestArena::GuestArenaSharedBacking_nid_postfix(address, page * 2, &file, &offset) && offset == page);
+    close(file);
+    Require(!GuestArena::GuestArenaSharedBacking_nid_postfix(address, page * 3, &file, &offset));
+    Require(!GuestArena::GuestArenaSharedBacking_nid_postfix(address, 0, &file, &offset));
+    void* flexible = nullptr;
+    Require(sceKernelMapFlexibleMemory(&flexible, page * 2, 3, 0) == 0);
+    const auto flexibleAddress = reinterpret_cast<std::uintptr_t>(flexible);
+    Require(!GuestArena::GuestArenaSharedBacking_nid_postfix(flexibleAddress, page, &file, &offset));
+    void* low = flexible;
+    Require(sceKernelMapDirectMemory(&low, page, 3, 0x10, phys, 0) == 0);
+    void* high = static_cast<unsigned char*>(flexible) + page;
+    Require(sceKernelMapDirectMemory(&high, page, 3, 0x10, phys + page, 0) == 0);
+    Require(GuestArena::GuestArenaSharedBacking_nid_postfix(flexibleAddress, page * 2, &file, &offset) && offset == 0);
+    close(file);
+    Require(sceKernelMapDirectMemory(&high, page, 3, 0x10, phys + page * 2, 0) == 0);
+    Require(!GuestArena::GuestArenaSharedBacking_nid_postfix(flexibleAddress, page * 2, &file, &offset));
+    Require(GuestArena::GuestArenaSharedBacking_nid_postfix(flexibleAddress + page, page, &file, &offset) && offset == page * 2);
+    close(file);
+    Require(sceKernelMunmap(flexible, page * 2) == 0);
+    Require(sceKernelMunmap(first, page * 2) == 0);
+    Require(!GuestArena::GuestArenaSharedBacking_nid_postfix(address, page, &file, &offset));
+    Require(sceKernelReleaseDirectMemory(phys, page * 3) == 0);
+}
+
 static void CheckDirectMemoryWriteWatch() {
     if (!GuestWriteWatch::GuestWriteWatchAvailable_nid_postfix()) {
         std::puts("write watch unavailable: direct memory not tested");
@@ -818,6 +861,7 @@ int main() {
     CheckWriteWatch();
     CheckDirectMemoryWriteWatch();
     CheckDirectMemoryBackingNeedsNoFilesystem();
+    CheckDirectMemorySharedBacking();
 #endif
     constexpr std::size_t page = 0x4000;
     const auto failed = reinterpret_cast<void*>(static_cast<std::uintptr_t>(-1));
