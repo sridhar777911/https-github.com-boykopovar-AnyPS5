@@ -99,4 +99,6 @@ struct PthreadPrivate {
     PthreadPrivate() : _finished(false), _retval(nullptr), _detached(false), _adopted(false) {}
 };
 
+bool GuestThreadStack(std::uintptr_t address, std::uintptr_t* start, std::uintptr_t* end);
+
 #endif

@@ -56,6 +56,8 @@ bool TraceEnabled() {
 
 constexpr std::uint64_t RUN_GET_CODEC_INFO = 1ull << 11;
 constexpr std::uint64_t RUN_MULTIPLE_FRAMES = 1ull << 12;
+constexpr std::uint64_t CONTROL_RESET = 1ull << 13;
+constexpr std::uint64_t CONTROL_INITIALIZE = 1ull << 14;
 constexpr std::uint64_t SIDEBAND_GAPLESS_DECODE = 1ull << 45;
 constexpr std::uint64_t SIDEBAND_FORMAT = 1ull << 46;
 constexpr std::uint64_t SIDEBAND_STREAM = 1ull << 47;
@@ -139,6 +141,7 @@ enum class JobKind : std::uint32_t {
     SetGaplessDecode = 3,
     Run = 4,
     GetStatistics = 5,
+    Control = 6,
 };
 
 struct JobHeader {
@@ -844,6 +847,43 @@ void RunOpus(Instance& instance, const JobHeader& job, const AjmBuffer* inputs, 
     WriteRunSideband(job, instance, result, consumed, pcmOutputs.produced, frames, CurrentFormat(instance));
 }
 
+void ClearContext(Instance& instance) {
+    instance.totalDecodedSamples = 0;
+    instance.gapless.skippedSamples = 0;
+    if (instance.decoder && instance.initialized) ResetDecoder(instance);
+    if (instance.mp3) avcodec_flush_buffers(instance.mp3);
+    if (instance.opus) avcodec_flush_buffers(instance.opus);
+    instance.opusPending.clear();
+}
+
+std::size_t ControlInitializeSize(std::uint32_t codec) {
+    switch (codec) {
+    case CODEC_MP3: return 0;
+    case CODEC_AT9: return 8;
+    case CODEC_OPUS: return 12;
+    default: NotImplemented_nid_no_patch("sceAjmBatchJobControl (INITIALIZE for a codec other than MP3, ATRAC9 and Opus)"); return 0;
+    }
+}
+
+void Control(Instance& instance, const JobHeader& job, const AjmBuffer* inputs) {
+    const auto* input = job.inputCount ? static_cast<const std::uint8_t*>(inputs[0].ptr) : nullptr;
+    const std::size_t inputSize = job.inputCount ? inputs[0].size : 0;
+    const std::size_t gaplessSize = (job.flags & SIDEBAND_GAPLESS_DECODE) ? sizeof(SidebandGaplessDecode) : 0;
+    const std::size_t initializeSize = (job.flags & CONTROL_INITIALIZE) ? ControlInitializeSize(instance.codec) : 0;
+    if (inputSize != gaplessSize + initializeSize) NotImplemented_nid_no_patch("sceAjmBatchJobControl (sideband input size other than the gapless decode and the codec's initialize parameters)");
+    std::int32_t result = 0;
+    if (job.flags & CONTROL_RESET) ClearContext(instance);
+    if (job.flags & CONTROL_INITIALIZE) result = InitializeInstance(instance, input + gaplessSize, initializeSize);
+    if (gaplessSize) {
+        SidebandGaplessDecode gapless{};
+        std::memcpy(&gapless, input, sizeof(gapless));
+        instance.gapless.totalSamples = gapless.totalSamples;
+        instance.gapless.skipSamples = gapless.skipSamples;
+    }
+    AJM_TRACE("[ajm] instance %u control flags 0x%llx: %zu sideband input bytes -> result 0x%x, gapless total %u skip %u skipped %u\n", job.instance, static_cast<unsigned long long>(job.flags), inputSize, static_cast<unsigned>(result), instance.gapless.totalSamples, instance.gapless.skipSamples, instance.gapless.skippedSamples);
+    WriteResult(job.sideband, job.sidebandSize, result);
+}
+
 void Execute(const JobHeader& job, const AjmBuffer* inputs, const AjmBuffer* outputs) {
     if (job.kind == JobKind::GetStatistics) {
         AJM_TRACE("[ajm] statistics job: sideband %llu bytes\n", static_cast<unsigned long long>(job.sidebandSize));
@@ -866,12 +906,7 @@ void Execute(const JobHeader& job, const AjmBuffer* inputs, const AjmBuffer* out
     }
     case JobKind::ClearContext:
         AJM_TRACE("[ajm] instance %u clear context (sideband %llu bytes)\n", job.instance, static_cast<unsigned long long>(job.sidebandSize));
-        instance->totalDecodedSamples = 0;
-        instance->gapless.skippedSamples = 0;
-        if (instance->decoder && instance->initialized) ResetDecoder(*instance);
-        if (instance->mp3) avcodec_flush_buffers(instance->mp3);
-        if (instance->opus) avcodec_flush_buffers(instance->opus);
-        instance->opusPending.clear();
+        ClearContext(*instance);
         WriteResult(job.sideband, job.sidebandSize, 0);
         break;
     case JobKind::SetGaplessDecode: {
@@ -884,6 +919,9 @@ void Execute(const JobHeader& job, const AjmBuffer* inputs, const AjmBuffer* out
         WriteResult(job.sideband, job.sidebandSize, 0);
         break;
     }
+    case JobKind::Control:
+        Control(*instance, job, inputs);
+        break;
     case JobKind::Run:
         if (!instance->initialized) {
             AJM_TRACE("[ajm] instance %u run before initialize\n", job.instance);
@@ -1029,6 +1067,19 @@ int APS5_VABI sceAjmBatchJobSetGaplessDecode(AjmBatchInfo* info, uint32_t instan
     return Append(info, header, nullptr, nullptr);
 }
 
+int APS5_VABI sceAjmBatchJobControl(AjmBatchInfo* info, uint32_t instance, uint64_t flags, const void* sideband_input, size_t sideband_input_size, void* sideband_output, size_t sideband_output_size) {
+    constexpr std::uint64_t supported = CONTROL_RESET | CONTROL_INITIALIZE | SIDEBAND_GAPLESS_DECODE;
+    if (flags == 0 || (flags & ~supported) != 0) NotImplemented_nid_no_patch("sceAjmBatchJobControl (flags other than a combination of RESET, INITIALIZE and SIDEBAND_GAPLESS_DECODE)");
+    if ((flags & SIDEBAND_GAPLESS_DECODE) != 0 && (flags & CONTROL_RESET) == 0) NotImplemented_nid_no_patch("sceAjmBatchJobControl (SIDEBAND_GAPLESS_DECODE without RESET)");
+    if (sideband_output_size != sizeof(SidebandResult)) NotImplemented_nid_no_patch("sceAjmBatchJobControl (sideband output other than the 8-byte result)");
+    if (sideband_input_size != 0 && !sideband_input) NotImplemented_nid_no_patch("sceAjmBatchJobControl (null sideband input)");
+    auto header = MakeHeader(JobKind::Control, instance, sideband_output, sideband_output_size);
+    header.flags = flags;
+    header.inputCount = sideband_input_size != 0 ? 1 : 0;
+    const AjmBuffer input{const_cast<void*>(sideband_input), sideband_input_size};
+    return Append(info, header, &input, nullptr);
+}
+
 int APS5_VABI sceAjmBatchJobRunSplit(AjmBatchInfo* info, uint32_t instance, uint64_t flags, const AjmBuffer* input_buffers, size_t input_buffers_num, const AjmBuffer* output_buffers, size_t output_buffers_num, void* sideband_output, size_t sideband_output_size) {
     auto header = MakeHeader(JobKind::Run, instance, sideband_output, sideband_output_size);
     header.flags = flags;
@@ -1053,6 +1104,10 @@ int APS5_VABI sceAjmBatchJobDecodeSingle(AjmBatchInfo* info, uint32_t instance, 
 
 int APS5_VABI sceAjmBatchJobGetGaplessDecode(AjmBatchInfo* info, uint32_t instance, void* result) {
     return sceAjmBatchJobRunSplit(info, instance, SIDEBAND_GAPLESS_DECODE, nullptr, 0, nullptr, 0, result, sizeof(SidebandResult) + sizeof(SidebandGaplessDecode));
+}
+
+int APS5_VABI sceAjmBatchJobGetInfo(AjmBatchInfo* info, uint32_t instance, void* result) {
+    return sceAjmBatchJobRunSplit(info, instance, SIDEBAND_FORMAT, nullptr, 0, nullptr, 0, result, sizeof(SidebandResult) + sizeof(SidebandFormat));
 }
 
 int APS5_VABI sceAjmBatchJobGetCodecInfo(AjmBatchInfo* info, uint32_t instance, void* result, size_t result_size) {

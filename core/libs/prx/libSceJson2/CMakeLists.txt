@@ -12,6 +12,7 @@ if(BUILD_TESTING)
     add_test_executable(guest_json_tests ${LIBS_INCLUDE_DIR}/tests/GuestJson.cpp)
     target_include_directories(guest_json_tests PRIVATE ${LIBS_INCLUDE_DIR})
     target_link_libraries(guest_json_tests PRIVATE libSceJson2 libc)
+    configure_windows_unwind(guest_json_tests)
     add_test(NAME guest_json COMMAND guest_json_tests)
     if(WIN32)
         set_tests_properties(guest_json PROPERTIES ENVIRONMENT_MODIFICATION
