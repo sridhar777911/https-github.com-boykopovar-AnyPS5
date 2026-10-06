@@ -398,7 +398,7 @@ ShaderVertexStageInfo readVertexInfo(Reader& reader, std::uint32_t version) {
     info.fetchAttribReg = reader.ReadU32();
     info.fetchBufferReg = reader.ReadU32();
     info.fetchEmbedded = reader.ReadBool();
-    if (version >= 7u) info.paClVsOutCntl = reader.ReadU32();
+    if (version >= 8u) info.paClVsOutCntl = reader.ReadU32();
     return info;
 }
 
