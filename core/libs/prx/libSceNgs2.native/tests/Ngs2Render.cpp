@@ -91,107 +91,90 @@ static bool Near(float a, float b) {
     return std::fabs(a - b) < 1e-4f;
 }
 
-static bool PanThrows(Ngs2PanWork& work, const Ngs2PanParam& param, std::uint32_t format) {
-    float out[8] = {};
-    try { sceNgs2PanGetVolumeMatrix(&work, &param, 1, format, out); } catch (const std::exception&) { return true; }
+static bool PanThrows(Ngs2PanWork* work, const Ngs2PanParam* params, std::uint32_t numParams, std::uint32_t format) {
+    float out[64] = {};
+    try { sceNgs2PanGetVolumeMatrix(work, params, numParams, format, out); } catch (const std::exception&) { return true; }
     return false;
 }
 
-static bool PanInitThrows(const float* angles, float unitAngle, std::uint32_t numSpeakers) {
-    Ngs2PanWork work{};
-    try { sceNgs2PanInit(&work, angles, unitAngle, numSpeakers); } catch (const std::exception&) { return true; }
+static bool PanInitThrows(Ngs2PanWork* work, const float* angles, float unitAngle, std::uint32_t numSpeakers) {
+    try { sceNgs2PanInit(work, angles, unitAngle, numSpeakers); } catch (const std::exception&) { return true; }
     return false;
 }
+
+struct PanCase {
+    std::vector<float> angles;
+    float unitAngle;
+    std::uint32_t numSpeakers;
+    std::vector<Ngs2PanParam> params;
+    std::uint32_t format;
+    std::vector<float> expected;
+};
 
 static void TestPan() {
-    const float pi = 3.14159265f;
-    const float half = std::sqrt(0.5f);
+    const float pi = std::numbers::pi_v<float>;
     Ngs2PanWork work{};
     Require(sceNgs2PanInit(&work, nullptr, 360.0f, 2) == SCE_NGS2_OK);
-    Require(work.num_speakers == 2 && work.unit_angle == 360.0f && Near(work.speaker_angles[0], -90.0f) && Near(work.speaker_angles[1], 90.0f));
-    const Ngs2PanParam params[] = {
-        {270.0f, 1.0f, 1.0f, 0.0f},
-        {90.0f, 1.0f, 1.0f, 0.0f},
-        {0.0f, 1.0f, 1.0f, 0.0f},
-        {315.0f, 1.0f, 1.0f, 0.0f},
-        {180.0f, 1.0f, 1.0f, 0.0f},
-        {270.0f, 1.0f, 0.5f, 0.0f},
-        {135.0f, 1.0f, 1.0f, 0.0f},
+    Require(work.num_speakers == 2 && work.unit_angle == 360.0f);
+    Require(work.speaker_angles[0] == 90.0f && work.speaker_angles[1] == 270.0f && work.speaker_angles[2] == 450.0f);
+    Require(sceNgs2PanInit(&work, nullptr, 2.0f * pi, 2) == SCE_NGS2_OK && work.unit_angle == 2.0f * pi);
+    Require(work.speaker_angles[0] == 90.0f / 180.0f * pi && work.speaker_angles[1] == 270.0f / 180.0f * pi && work.speaker_angles[2] == 450.0f);
+    Require(sceNgs2PanInit(&work, nullptr, 100.0f, 4) == SCE_NGS2_OK && work.unit_angle == 360.0f && work.speaker_angles[4] == 400.0f);
+    const float frontBack[] = {-30.0f, 30.0f, 0.0f, -110.0f, 470.0f};
+    Require(sceNgs2PanInit(&work, frontBack, 360.0f, 5) == SCE_NGS2_OK);
+    const float circle[] = {0.0f, 30.0f, 110.0f, 250.0f, 330.0f, 360.0f};
+    for (std::uint32_t i = 0; i < 6; i++) Require(work.speaker_angles[i] == circle[i]);
+
+    const std::vector<PanCase> cases = {
+        {{}, 360.0f, 2, {{0, 1, 1, 0}, {45, 1, 1, 0}, {90, 1, 1, 0}, {135, 1, 1, 0}, {180, 1, 1, 0}, {225, 1, 1, 0}, {270, 1, 1, 0}, {315, 1, 1, 0}}, 2,
+         {0.707106769f, 0.382683456f, 0.0f, 0.382683456f, 0.707106769f, 0.923879504f, 1.0f, 0.923879504f, 0.707106769f, 0.923879504f, 1.0f, 0.923879504f, 0.707106769f, 0.382683456f, 0.0f, 0.382683456f}},
+        {{}, 360.0f, 2, {{30, 0, 1, 0}, {30, -1, 1, 0}, {30, 0.5f, 0.5f, 0}, {30, 3, 1, 0}, {-30, -0.25f, 1, 0}}, 2,
+         {0.965925813f, 0.866025448f, 0.39667666f, 0.49999997f, 0.896872759f, 0.965925813f, 0.49999997f, 0.495722443f, 0.866025448f, 0.997858942f}},
+        {{}, 360.0f, 2, {{60, 1, 1, 0.5f}}, 1, {0.866025388f}},
+        {{}, 360.0f, 2, {{60, 1, 1, 0.5f}}, 6, {0.258819073f, 0.965925813f, 0.0f, 0.0f, 0.0f, 0.0f}},
+        {{}, 2.0f * pi, 2, {{0.25f * pi, 1, 1, 0}, {1.5f * pi, 1, 1, 0}}, 2, {0.999965429f, 1.0f, 0.00831161533f, 0.0f}},
+        {{}, 360.0f, 4, {{100, 1, 1, 0.25f}}, 6, {0.0f, 0.222520918f, 0.0f, 0.25f, 0.0f, 0.974927902f}},
+        {{}, 360.0f, 4, {{100, 1, 1, 0.25f}}, 2, {0.0f, 0.709984899f}},
+        {{}, 360.0f, 5, {{70, 1, 0.8f, 0.5f}, {200, 0.5f, 1, 0}}, 6,
+         {0.0f, 0.0f, 0.625465155f, 0.270598054f, 0.0f, 0.270598054f, 0.5f, 0.0f, 0.0f, 0.782271147f, 0.498791903f, 0.491533577f}},
+        {{}, 360.0f, 5, {{70, 1, 0.8f, 0.5f}}, 1, {0.691666603f}},
+        {{}, 360.0f, 7, {{180, 1, 1, 0.25f}}, 8, {0.0f, 0.0f, 0.0f, 0.25f, 0.0f, 0.0f, 0.707106769f, 0.707106769f}},
+        {{}, 360.0f, 7, {{180, 1, 1, 0.25f}}, 6, {0.0f, 0.0f, 0.0f, 0.25f, 0.707106769f, 0.707106769f}},
+        {{-pi / 6, pi / 6, 0, -110 * pi / 180, 110 * pi / 180}, 2.0f * pi, 5, {{1.0f, 1, 1, 0}, {-2.5f, 0.2f, 1, 0.1f}}, 6,
+         {0.0f, 0.0f, 0.859783232f, 0.582614243f, 0.0f, 0.0f, 0.0f, 0.100000001f, 0.0f, 0.753403723f, 0.510659218f, 0.372568965f}},
+        {{-30, 30, 0, -90, 90, -150, 150}, 360.0f, 7, {{-120, 1, 1, 0}}, 1, {0.707106769f}},
+        {{-45, 45}, 360.0f, 2, {{10, 1, 1, 0}, {720 + 170, 1, 1, 0}}, 2, {0.57357651f, 0.664795876f, 0.819152057f, 0.747025073f}},
+        {{-40, 40, -120, 120}, 360.0f, 4, {{-80, 0.75f, 1, 0}}, 8, {0.69351995f, 0.0746578425f, 0.0f, 0.0f, 0.69351995f, 0.180239946f, 0.0f, 0.0f}},
     };
-    float stereo[14] = {};
-    Require(sceNgs2PanGetVolumeMatrix(&work, params, 7, 2, nullptr) == SCE_NGS2_ERROR_INVALID_OUT_ADDRESS);
-    Require(sceNgs2PanGetVolumeMatrix(&work, params, 0, 2, stereo) == SCE_NGS2_OK);
-    Require(sceNgs2PanGetVolumeMatrix(&work, nullptr, 0, 2, stereo) == SCE_NGS2_OK);
-    Require(sceNgs2PanGetVolumeMatrix(&work, params, 7, 2, stereo) == SCE_NGS2_OK);
-    Require(Near(stereo[0], 1.0f) && Near(stereo[1], 0.0f));
-    Require(Near(stereo[2], 0.0f) && Near(stereo[3], 1.0f));
-    Require(Near(stereo[4], half) && Near(stereo[5], half));
-    Require(Near(stereo[6], std::cos(pi / 8.0f)) && Near(stereo[7], std::sin(pi / 8.0f)));
-    Require(Near(stereo[8], half) && Near(stereo[9], half));
-    Require(Near(stereo[10], 0.5f) && Near(stereo[11], 0.0f));
-    Require(Near(stereo[12], std::sin(pi / 8.0f)) && Near(stereo[13], std::cos(pi / 8.0f)));
+    for (const auto& panCase : cases) {
+        Require(sceNgs2PanInit(&work, panCase.angles.empty() ? nullptr : panCase.angles.data(), panCase.unitAngle, panCase.numSpeakers) == SCE_NGS2_OK);
+        std::vector<float> out(panCase.expected.size(), -1.0f);
+        Require(sceNgs2PanGetVolumeMatrix(&work, panCase.params.data(), static_cast<std::uint32_t>(panCase.params.size()), panCase.format, out.data()) == SCE_NGS2_OK);
+        for (std::size_t i = 0; i < out.size(); i++) Require(std::fabs(out[i] - panCase.expected[i]) < 1e-6f);
+    }
 
-    float out[8] = {};
-    Require(sceNgs2PanInit(&work, nullptr, 2.0f * pi, 2) == SCE_NGS2_OK && Near(work.speaker_angles[0], -pi / 2.0f));
-    const Ngs2PanParam radiansLeft{1.5f * pi, 1.0f, 1.0f, 0.0f};
-    Require(sceNgs2PanGetVolumeMatrix(&work, &radiansLeft, 1, 2, out) == SCE_NGS2_OK && Near(out[0], 1.0f) && Near(out[1], 0.0f));
-
-    const float leftRight[] = {270.0f, 90.0f};
-    const Ngs2PanParam left{270.0f, 1.0f, 1.0f, 0.0f};
-    Require(sceNgs2PanInit(&work, leftRight, 360.0f, 2) == SCE_NGS2_OK);
-    Require(sceNgs2PanGetVolumeMatrix(&work, &left, 1, 2, out) == SCE_NGS2_OK && Near(out[0], 1.0f) && Near(out[1], 0.0f));
-
-    const float mono[] = {0.0f};
-    Require(sceNgs2PanInit(&work, mono, 360.0f, 1) == SCE_NGS2_OK);
-    Require(sceNgs2PanGetVolumeMatrix(&work, &left, 1, 1, out) == SCE_NGS2_OK && Near(out[0], 1.0f));
-
-    const float surround[] = {-pi / 6.0f, pi / 6.0f, 0.0f, -110.0f * pi / 180.0f, 110.0f * pi / 180.0f};
-    Require(sceNgs2PanInit(&work, surround, 2.0f * pi, 5) == SCE_NGS2_OK);
-    const Ngs2PanParam front{0.0f, 1.0f, 1.0f, 0.5f};
-    Require(sceNgs2PanGetVolumeMatrix(&work, &front, 1, 6, out) == SCE_NGS2_OK);
-    Require(Near(out[0], 0.0f) && Near(out[1], 0.0f) && Near(out[2], 1.0f) && Near(out[3], 0.5f) && Near(out[4], 0.0f) && Near(out[5], 0.0f));
-    const Ngs2PanParam back{pi, 1.0f, 1.0f, 0.0f};
-    Require(sceNgs2PanGetVolumeMatrix(&work, &back, 1, 6, out) == SCE_NGS2_OK);
-    Require(Near(out[2], 0.0f) && Near(out[3], 0.0f) && Near(out[4], half) && Near(out[5], half));
-    const Ngs2PanParam rightSide{60.0f * pi / 180.0f, 1.0f, 1.0f, 0.0f};
-    Require(sceNgs2PanGetVolumeMatrix(&work, &rightSide, 1, 6, out) == SCE_NGS2_OK);
-    Require(Near(out[1], std::cos(0.375f * pi / 2.0f)) && Near(out[5], std::sin(0.375f * pi / 2.0f)) && Near(out[0], 0.0f) && Near(out[4], 0.0f));
-
-    const float unsorted[] = {110.0f, -30.0f, 0.0f, 30.0f, -110.0f};
-    const Ngs2PanParam between{70.0f, 1.0f, 1.0f, 0.0f};
-    Require(sceNgs2PanInit(&work, unsorted, 360.0f, 5) == SCE_NGS2_OK);
-    Require(sceNgs2PanGetVolumeMatrix(&work, &between, 1, 6, out) == SCE_NGS2_OK);
-    Require(Near(out[0], half) && Near(out[4], half) && Near(out[1], 0.0f) && Near(out[2], 0.0f) && Near(out[5], 0.0f));
-
-    const float surround71[] = {-30.0f, 30.0f, 0.0f, -90.0f, 90.0f, -150.0f, 150.0f};
-    const Ngs2PanParam behind{180.0f, 1.0f, 1.0f, 0.25f};
-    Require(sceNgs2PanInit(&work, surround71, 360.0f, 7) == SCE_NGS2_OK);
-    Require(sceNgs2PanGetVolumeMatrix(&work, &behind, 1, 8, out) == SCE_NGS2_OK);
-    Require(Near(out[6], half) && Near(out[7], half) && Near(out[3], 0.25f) && Near(out[2], 0.0f) && Near(out[5], 0.0f));
-
-    const float coincident[] = {0.0f, 0.0f, 90.0f, 180.0f, -90.0f};
-    const Ngs2PanParam diagonal{45.0f, 1.0f, 1.0f, 0.0f};
-    Require(sceNgs2PanInit(&work, coincident, 360.0f, 5) == SCE_NGS2_OK);
-    Require(sceNgs2PanGetVolumeMatrix(&work, &diagonal, 1, 6, out) == SCE_NGS2_OK);
-    Require(Near(out[2], half) && Near(out[0] * out[0] + out[1] * out[1], 0.5f));
-    const Ngs2PanParam onShared{0.0f, 1.0f, 1.0f, 0.0f};
-    Require(sceNgs2PanGetVolumeMatrix(&work, &onShared, 1, 6, out) == SCE_NGS2_OK);
-    Require(Near(out[0] * out[0] + out[1] * out[1], 1.0f) && Near(out[2], 0.0f) && Near(out[4], 0.0f) && Near(out[5], 0.0f));
-    const float sharedLowest[] = {-120.0f, -120.0f, 0.0f, 60.0f, 120.0f};
-    const Ngs2PanParam onLowest{-120.0f, 1.0f, 1.0f, 0.0f};
-    Require(sceNgs2PanInit(&work, sharedLowest, 360.0f, 5) == SCE_NGS2_OK);
-    Require(sceNgs2PanGetVolumeMatrix(&work, &onLowest, 1, 6, out) == SCE_NGS2_OK);
-    Require(Near(out[0] * out[0] + out[1] * out[1], 1.0f) && Near(out[2], 0.0f) && Near(out[4], 0.0f) && Near(out[5], 0.0f));
-
-    Require(PanThrows(work, Ngs2PanParam{0.0f, 0.5f, 1.0f, 0.0f}, 6) && PanThrows(work, Ngs2PanParam{NAN, 1.0f, 1.0f, 0.0f}, 6));
-    Require(PanThrows(work, front, 4) && PanThrows(work, front, 2) && !PanThrows(work, front, 6));
-    Require(PanInitThrows(nullptr, 360.0f, 5) && PanInitThrows(nullptr, 360.0f, 0) && PanInitThrows(surround71, 360.0f, 8));
-    Require(PanInitThrows(nullptr, 0.0f, 2) && PanInitThrows(nullptr, NAN, 2));
+    const Ngs2PanParam front{0.0f, 1.0f, 1.0f, 0.0f};
+    float out[2] = {};
+    Require(sceNgs2PanInit(&work, nullptr, 360.0f, 2) == SCE_NGS2_OK);
+    Require(sceNgs2PanGetVolumeMatrix(&work, &front, 1, 2, nullptr) == SCE_NGS2_ERROR_INVALID_OUT_ADDRESS);
+    Require(sceNgs2PanGetVolumeMatrix(&work, &front, 0, 2, out) == SCE_NGS2_OK);
+    Require(PanThrows(nullptr, &front, 1, 2) && PanThrows(&work, nullptr, 0, 2));
+    Require(PanThrows(&work, &front, 1, 4) && PanThrows(&work, &front, 1, 3) && !PanThrows(&work, &front, 1, 8));
+    const Ngs2PanParam many[9] = {};
+    Require(PanThrows(&work, many, 9, 2) && !PanThrows(&work, many, 8, 2));
+    const Ngs2PanParam nanAngle{NAN, 1.0f, 1.0f, 0.0f};
+    Require(PanThrows(&work, &nanAngle, 1, 2));
+    Require(PanInitThrows(nullptr, nullptr, 360.0f, 2));
+    for (std::uint32_t count : {0u, 1u, 3u, 6u, 8u}) Require(PanInitThrows(&work, nullptr, 360.0f, count));
+    const float pair[] = {-30.0f, 30.0f};
+    Require(PanInitThrows(&work, pair, 180.0f, 2) && !PanInitThrows(&work, pair, 2.0f * pi, 2));
     const float invalid[] = {0.0f, NAN};
-    Require(PanInitThrows(invalid, 360.0f, 2));
-    bool nullWork = false;
-    try { sceNgs2PanGetVolumeMatrix(nullptr, &front, 1, 2, out); } catch (const std::exception&) { nullWork = true; }
-    Require(nullWork);
+    Require(PanInitThrows(&work, invalid, 360.0f, 2));
+    const float onUnit[] = {720.0f, 30.0f};
+    const float belowZero[] = {-360.0f, 30.0f};
+    Require(PanInitThrows(&work, onUnit, 360.0f, 2) && !PanInitThrows(&work, belowZero, 360.0f, 2));
+    work.unit_angle = 100.0f;
+    Require(PanThrows(&work, &front, 1, 2));
 }
 
 static void TestPitchAndRepeat() {
