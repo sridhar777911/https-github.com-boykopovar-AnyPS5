@@ -115,12 +115,12 @@ std::size_t AdtsLength(const std::uint8_t* frame) {
     return static_cast<std::size_t>((frame[3] & 3) << 11 | frame[4] << 3 | frame[5] >> 5);
 }
 
-void TestAac(bool adts) {
-    AudiodecParamM4aac param{sizeof(param), 1, adts ? 1u : 2u, 3, 2, 0};
+void TestAac(bool adts, std::uint32_t maxChannels = 2) {
+    AudiodecParamM4aac param{sizeof(param), 1, adts ? 1u : 2u, 3, maxChannels, 0};
     AudiodecM4aacInfo info{sizeof(info), 0, 0, 0, 0};
     AudiodecCtrl ctrl{&param, &info, nullptr, nullptr};
     const std::int32_t handle = sceAudiodecCreateDecoder(&ctrl, 3);
-    Require(handle > 0 && info.ui_sampling_freq == 48000 && info.ui_number_of_channels == 2);
+    Require(handle > 0 && info.ui_sampling_freq == 48000 && info.ui_number_of_channels == maxChannels);
     Streams streams;
     int crossings = 0;
     for (std::size_t offset = 0, frame = 0; offset < sizeof(AAC_ADTS); offset += AdtsLength(AAC_ADTS + offset), ++frame) {
@@ -229,6 +229,8 @@ int main() {
 
     TestAac(true);
     TestAac(false);
+    TestAac(false, 6);
+    TestAac(false, 8);
     TestMp3();
     TestAt9();
     for (std::uint32_t type = 1; type <= 3; ++type) Require(sceAudiodecTermLibrary(type) == 0);
