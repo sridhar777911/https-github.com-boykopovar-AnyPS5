@@ -1,6 +1,7 @@
 #include "prx/libSceAgcDriver/Execution/include/Pm4.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver.hpp"
+#include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Submit/include/Dcb.hpp"
 #include "prx/libSceAgcDriver/Submit/include/Acb.hpp"
 #include "prx/libc/include/Shutdown.hpp"
@@ -59,7 +60,7 @@ void testCatalog() {
         const auto reason = AgcDriver::Pm4::UnsupportedReason(packet[0]);
         if (!reason.empty()) expectFailure([&] { AgcDriver::Pm4::Validate(packet, 0); }, std::string(reason).c_str());
     }
-    check(values.size() == 54, "reference opcode catalog is incomplete");
+    check(values.size() == 55, "reference opcode catalog is incomplete");
     expectFailure([] { AgcDriver::Pm4::Validate(makePacket(0xff, {0}), 0); }, "not known");
     const std::array<std::pair<std::uint32_t, const char*>, 11> custom{{
         {5, "DRAW_RESET"}, {6, "WAIT_FLIP_DONE"}, {9, "DISPATCH_RESET"}, {11, "PUSH_MARKER"},
@@ -780,6 +781,81 @@ void testPredicatedSubmission() {
     AgcDriverWaitIdle_nid_postfix();
 }
 
+std::vector<std::uint32_t> condWrite(std::uint32_t control, const std::uint32_t& poll, std::uint32_t reference, std::uint32_t mask, std::uint32_t& target, std::uint32_t value) {
+    return makePacket(0x45, {control, low(&poll), high(&poll), reference, mask, low(&target), high(&target), value});
+}
+
+void testConditionalWrite() {
+    AgcDriver::QueueState state;
+    alignas(4) std::uint32_t poll = 0x1234u;
+    alignas(4) std::uint32_t target = 0;
+    const auto valid = condWrite(0x113, poll, 0x34, 0xff, target, 7);
+    check(AgcDriver::Pm4::Name(valid[0]) == "COND_WRITE" && valid[0] == 0xc0074500u, "COND_WRITE header or name mismatch");
+    check(AgcDriver::Pm4::UnsupportedReason(valid[0]).empty() && AgcDriver::Pm4::AccessesMemory(valid[0]), "COND_WRITE is rejected or does not synchronize guest memory");
+
+    const std::array<std::pair<std::uint32_t, bool>, 7> functions{{{0, true}, {1, false}, {2, true}, {3, true}, {4, false}, {5, true}, {6, false}}};
+    for (const auto& [function, writes] : functions) {
+        target = 0;
+        execute(state, condWrite(0x110 | function, poll, 0x34, 0xff, target, 9));
+        check(target == (writes ? 9u : 0u), "COND_WRITE compared the masked poll value incorrectly");
+    }
+    target = 0;
+    execute(state, condWrite(0x111, poll, 0x35, 0xff, target, 10));
+    check(target == 10, "COND_WRITE less-than did not write");
+    target = 0;
+    execute(state, condWrite(0x116, poll, 0x1233, 0xffffffffu, target, 11));
+    check(target == 11, "COND_WRITE greater-than with a full mask did not write");
+
+    expectFailure([&] { AgcDriver::Pm4::Validate(makePacket(0x45, {0x113, low(&poll), high(&poll), 0, 0, low(&target), high(&target)}), 0); }, "packet size");
+    expectFailure([&] { AgcDriver::Pm4::Validate(condWrite(0x2000113, poll, 0, 0, target, 0), 0); }, "reserved");
+    expectFailure([&] { AgcDriver::Pm4::Validate(condWrite(0x103, poll, 0, 0, target, 0), 0); }, "register-space");
+    expectFailure([&] { AgcDriver::Pm4::Validate(condWrite(0x117, poll, 0, 0, target, 0), 0); }, "compare function");
+    expectFailure([&] { AgcDriver::Pm4::Validate(condWrite(0x013, poll, 0, 0, target, 0), 0); }, "destination");
+    expectFailure([&] { AgcDriver::Pm4::Validate(condWrite(0x213, poll, 0, 0, target, 0), 0); }, "destination");
+    auto misaligned = condWrite(0x113, poll, 0, 0, target, 0);
+    misaligned[2] += 2;
+    expectFailure([&] { AgcDriver::Pm4::Validate(misaligned, 0); }, "misaligned");
+    misaligned = condWrite(0x113, poll, 0, 0, target, 0);
+    misaligned[6] += 1;
+    expectFailure([&] { AgcDriver::Pm4::Validate(misaligned, 0); }, "misaligned");
+
+    struct MemoryState {
+        std::uint32_t poll = 0;
+        std::uint32_t target = 0;
+        bool read = false;
+        bool written = false;
+    };
+    static MemoryState memory;
+    memory = {};
+    struct FlushHookReset {
+        ~FlushHookReset() { AgcDriver::GuestMemory::SetFlushHook(nullptr); }
+    } reset;
+    AgcDriver::GuestMemory::SetFlushHook([](std::uint64_t address, std::size_t bytes) {
+        check(bytes == sizeof(std::uint32_t), "COND_WRITE resolved an unrelated range");
+        if (address == reinterpret_cast<std::uintptr_t>(&memory.target)) {
+            memory.written = true;
+        } else {
+            check(address == reinterpret_cast<std::uintptr_t>(&memory.poll), "COND_WRITE resolved an unrelated poll address");
+            memory.poll = 5;
+            memory.read = true;
+        }
+    });
+    execute(state, condWrite(0x113, memory.poll, 5, 0xffffffffu, memory.target, 12));
+    check(memory.read && memory.written && memory.target == 12, "COND_WRITE used a stale poll value or skipped synchronizing its target");
+}
+
+void testConditionalWriteSubmission() {
+    alignas(4) static std::uint32_t poll = 0;
+    static std::array<std::uint32_t, 2> results{};
+    results.fill(0);
+    poll = 0;
+    auto words = joinPackets({writeWord(poll, 5), condWrite(0x113, poll, 5, 0xffffffffu, results[0], 51), condWrite(0x114, poll, 5, 0xffffffffu, results[1], 52)});
+    submitWords(words);
+    AgcDriverWaitIdle_nid_postfix();
+    check(results[0] == 51, "COND_WRITE read its poll value before an earlier packet of its queue stored it");
+    check(results[1] == 0, "COND_WRITE wrote although its comparison failed");
+}
+
 void testAsyncMemoryFailure() {
     auto commands = makePacket(0x37, {0x100, 0x1000, 0, 1});
     Packet packet{commands.data(), static_cast<std::uint32_t>(commands.size()), 0, {}};
@@ -790,6 +866,14 @@ void testAsyncMemoryFailure() {
     expectFailure([] { LibcRunShutdown_nid_postfix(); }, "guest");
 }
 
+}
+
+void testUnwrittenUserData() {
+    AgcDriver::Registers shader{{0x8c, 0x100}, {0x8d, 0}, {0x240, 0x200}};
+    check(AgcDriver::DriverDetail::readUserData(shader, 0x8c) == 0x100 && AgcDriver::DriverDetail::readUserData(shader, 0x240) == 0x200, "a written user data register was not read");
+    check(AgcDriver::DriverDetail::readUserData(shader, 0x8d) == 0, "a user data register written as zero was not read");
+    check(AgcDriver::DriverDetail::readUserData(shader, 0x95) == 0 && AgcDriver::DriverDetail::readUserData(shader, 0x241) == 0, "an unwritten user data register does not read zero");
+    expectFailure([&] { static_cast<void>(AgcDriver::DriverDetail::readRegister(shader, 0x95)); }, "required shader register");
 }
 
 int main(int argc, char** argv) {
@@ -815,7 +899,10 @@ int main(int argc, char** argv) {
         testConditionReadSynchronization();
         testEventWrite();
         testAcquireMem();
+        testConditionalWrite();
+        testConditionalWriteSubmission();
         testPredication();
+        testUnwrittenUserData();
         testDriverSubmission();
         testPredicatedSubmission();
         testConditionalSubmission();

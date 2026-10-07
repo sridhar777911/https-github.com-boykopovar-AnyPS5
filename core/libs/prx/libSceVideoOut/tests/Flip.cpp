@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 #include <limits>
 #include <thread>
@@ -229,6 +230,12 @@ void testControls() {
     const auto handle = sceVideoOutOpen(255, 0, 0, openParam.data());
     check(handle >= 0, "open with the highest priority on every CPU failed");
     const auto cfg = VideoOutDriver::Get().GetConfig(handle);
+    check(sceVideoOutIsOutputSupported(handle, VIDEO_OUT_OUTPUT_MODE_DEFAULT, nullptr, nullptr, 0) == 1, "default output mode is unsupported");
+    for (const uint64_t unsupported : std::initializer_list<uint64_t>{VIDEO_OUT_OUTPUT_MODE_119_88HZ, 0xd000000aull}) {
+        check(sceVideoOutIsOutputSupported(handle, unsupported, nullptr, nullptr, 0) == 0, "unavailable output mode is supported");
+        check(sceVideoOutConfigureOutput(handle, unsupported, nullptr, nullptr, 0) == VIDEO_OUT_ERROR_UNAVAILABLE_OUTPUT_MODE, "unavailable output mode was configured");
+    }
+    check(sceVideoOutConfigureOutput(handle, VIDEO_OUT_OUTPUT_MODE_DEFAULT, nullptr, nullptr, 0) == 0, "default output mode was rejected");
     for (int rate = 0; rate <= 2; ++rate) {
         check(sceVideoOutSetFlipRate(handle, rate) == 0 && cfg->flipRate == rate, "flip rate was not applied");
     }

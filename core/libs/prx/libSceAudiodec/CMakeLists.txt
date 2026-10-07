@@ -1,14 +1,5 @@
-add_library(libSceAudiodec SHARED EXCLUDE_FROM_ALL
-        ${CMAKE_CURRENT_SOURCE_DIR}/Export.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/Codecs.cpp
-)
-target_include_directories(libSceAudiodec PRIVATE
-        ${LIBS_INCLUDE_DIR}
-        ${CMAKE_SOURCE_DIR}/3rdparty/LibAtrac9/C/src
-)
-target_link_libraries(libSceAudiodec PRIVATE atrac9 ffmpeg libc libkernel)
-set_target_properties(libSceAudiodec PROPERTIES CXX_EXTENSIONS OFF)
-configure_windows_unwind(libSceAudiodec)
+include(${CMAKE_CURRENT_SOURCE_DIR}/AudiodecLibrary.cmake)
+add_sce_audiodec_library(libSceAudiodec)
 
 if(MINGW)
     foreach(runtimeLinkFlag IN ITEMS -static-libgcc -static-libstdc++ -static)

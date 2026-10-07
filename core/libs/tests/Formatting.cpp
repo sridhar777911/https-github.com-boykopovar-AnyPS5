@@ -38,6 +38,34 @@ static int APS5_VABI PrintList(const char* format, ...) {
     return result;
 }
 
+static bool CheckWidePrecision() {
+    const char16_t input[] = u"A\u00e9\u20ac\U0001f600Z";
+    const char* expected[] = {"", "A", "A", "A\xc3\xa9", "A\xc3\xa9", "A\xc3\xa9", "A\xc3\xa9\xe2\x82\xac",
+        "A\xc3\xa9\xe2\x82\xac", "A\xc3\xa9\xe2\x82\xac", "A\xc3\xa9\xe2\x82\xac",
+        "A\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80", "A\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80Z"};
+    bool correct = true;
+    for (int precision = 0; precision < 12; ++precision) {
+        char output[32];
+        std::memset(output, '!', sizeof(output));
+        const int count = snprintf_nid_postfix(output, sizeof(output), "%.*ls", precision, input);
+        const auto expectedSize = std::strlen(expected[precision]);
+        const bool matches = count == expectedSize && std::strcmp(output, expected[precision]) == 0 && output[expectedSize + 1] == '!';
+        if (!matches) std::fprintf(stderr, "wide precision %d: expected %zu complete UTF-8 bytes, received %d\n", precision, expectedSize, count);
+        correct &= matches;
+    }
+    if (!correct) return false;
+    char output[32];
+    Require(snprintf_nid_postfix(output, sizeof(output), "[%5.1ls]", u"\u00e9") == 7 && std::strcmp(output, "[     ]") == 0);
+    Require(snprintf_nid_postfix(output, sizeof(output), "[%-5.2ls]", u"\u00e9") == 7 && std::strcmp(output, "[\xc3\xa9   ]") == 0);
+    Require(FormatList(output, sizeof(output), "%.3ls", u"\U0001f600") == 0 && output[0] == 0);
+    Require(FormatList(output, sizeof(output), "%.*ls:%d", -1, u"\u00e9", 7) == 4 && std::strcmp(output, "\xc3\xa9:7") == 0);
+    const char16_t bounded[] = {u'A', u'B'};
+    Require(snprintf_nid_postfix(output, sizeof(output), "%.2ls", bounded) == 2 && std::strcmp(output, "AB") == 0);
+    Require(snprintf_nid_postfix(nullptr, 0, "%.1ls", u"\u00e9") == 0);
+    Require(snprintf_nid_postfix(output, sizeof(output), "%.1s", "\xc3\xa9") == 1 && static_cast<unsigned char>(output[0]) == 0xc3 && output[1] == 0);
+    return correct;
+}
+
 __attribute__((noinline)) static void APS5_VABI RunChecks() {
     char buffer[1024];
     Require(FormatList(buffer, sizeof(buffer), "Mount requested: %d", 0) == 18);
@@ -85,4 +113,4 @@ __attribute__((noinline)) static void APS5_VABI RunChecks() {
     std::puts("Formatting checks passed: 10000 iterations");
 }
 
-int main() { RunChecks(); }
+int main() { RunChecks(); return CheckWidePrecision() ? 0 : 1; }

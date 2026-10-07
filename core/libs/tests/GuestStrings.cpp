@@ -34,6 +34,33 @@ static void Require(bool condition) {
     }
 }
 
+static bool CheckMemcpyOverlap() {
+    bool correct = true;
+    for (const auto offset : {0, 1, -1, 3, -3}) {
+        unsigned char bytes[16];
+        std::memset(bytes, 0x5a, sizeof(bytes));
+        auto* destination = bytes + 4;
+        const auto* source = destination + offset;
+        const int error = memcpy_s_nid_postfix(destination, 8, source, 4);
+        bool cleared = true;
+        for (unsigned i = 4; i < 12; ++i) cleared &= bytes[i] == 0;
+        const bool matches = error == 22 && cleared && bytes[3] == 0x5a && bytes[12] == 0x5a;
+        if (!matches) std::fprintf(stderr, "memcpy_s overlap %+d: expected EINVAL 22 and eight zero bytes, received %d\n", offset, error);
+        correct &= matches;
+    }
+    unsigned char adjacent[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    Require(memcpy_s_nid_postfix(adjacent, 4, adjacent + 4, 4) == 0);
+    Require(std::memcmp(adjacent, adjacent + 4, 4) == 0);
+    const unsigned char original[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    std::memcpy(adjacent, original, sizeof(adjacent));
+    Require(memcpy_s_nid_postfix(adjacent + 4, 4, adjacent, 4) == 0);
+    const unsigned char unchanged[] = {1, 2, 3, 4, 1, 2, 3, 4};
+    Require(std::memcmp(adjacent, unchanged, sizeof(adjacent)) == 0);
+    Require(memcpy_s_nid_postfix(adjacent, sizeof(adjacent), adjacent, 0) == 0);
+    Require(std::memcmp(adjacent, unchanged, sizeof(adjacent)) == 0);
+    return correct;
+}
+
 static void CheckBoundsCheckedFunctions() {
     char small[4] = "zz";
     Require(strcpy_s_nid_postfix(small, sizeof(small), "abc") == 0 && std::strcmp(small, "abc") == 0);
@@ -131,4 +158,5 @@ int main() {
     Require(strcasestr_nid_postfix("", "a") == nullptr);
     const char highBytes[] = {static_cast<char>(0xff), 'A', 0};
     Require(strcasestr_nid_postfix(highBytes, "a") == highBytes + 1);
+    return CheckMemcpyOverlap() ? 0 : 1;
 }

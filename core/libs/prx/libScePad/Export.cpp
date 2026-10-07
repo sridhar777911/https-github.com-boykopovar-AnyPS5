@@ -150,7 +150,7 @@ int APS5_VABI scePadRead_nid_postfix(int handle, PadData* data, int num) {
 }
 
 int APS5_VABI scePadReadState(int handle, PadData* data) {
- if (handle != 1) APS5_INVALID_ARG_EX;
+ if (handle != PAD_HANDLE) return PAD_ERROR_INVALID_HANDLE;
  if (data == nullptr) APS5_INVALID_ARG_EX;
 
  *data = Pad::ReadState();
@@ -231,6 +231,16 @@ int APS5_VABI scePadSetVibrationMode(int handle, int mode) {
 int APS5_VABI scePadSetVibrationTriggerEffectWeakWhileEmbeddedMicInUse(bool enabled) {
  (void)enabled;
  return PAD_OK;
+}
+
+int APS5_VABI scePadVrControllerGetDeviceInformation() {
+ NotImplemented_nid_no_patch(__func__);
+ return 0;
+}
+
+int APS5_VABI scePadVrControllerRead() {
+ NotImplemented_nid_no_patch(__func__);
+ return 0;
 }
 
 APS5_EXPORT("fCWdlnmB1Ks", scePadUnknown_fCWdlnmB1Ks);

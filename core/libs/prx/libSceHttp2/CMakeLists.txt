@@ -1,0 +1,21 @@
+add_library(libSceHttp2 SHARED EXCLUDE_FROM_ALL Export.cpp)
+target_include_directories(libSceHttp2 PRIVATE ${LIBS_INCLUDE_DIR})
+configure_windows_unwind(libSceHttp2)
+
+if(MINGW)
+    foreach(runtimeLinkFlag IN ITEMS -static-libgcc -static-libstdc++ -static)
+        string(REPLACE "${runtimeLinkFlag}" "" CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+    endforeach()
+endif()
+
+if(BUILD_TESTING)
+    add_test_executable(guest_http2_tests ${LIBS_INCLUDE_DIR}/tests/GuestHttp2.cpp)
+    target_include_directories(guest_http2_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(guest_http2_tests PRIVATE libSceHttp2 libc)
+    configure_windows_unwind(guest_http2_tests)
+    add_test(NAME guest_http2 COMMAND guest_http2_tests)
+    if(WIN32)
+        set_tests_properties(guest_http2 PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceHttp2>")
+    endif()
+endif()

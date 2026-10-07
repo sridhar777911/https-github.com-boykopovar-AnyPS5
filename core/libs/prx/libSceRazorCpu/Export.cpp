@@ -35,4 +35,9 @@ int APS5_VABI sceRazorCpuPopMarker(void) {
  return 0;
 }
 
+int APS5_VABI sceRazorCpuFlushOccurred(uint64_t* timeSpentInFlush) {
+ if (timeSpentInFlush != nullptr) *timeSpentInFlush = 0;
+ return 0;
+}
+
 }

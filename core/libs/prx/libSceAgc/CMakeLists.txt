@@ -72,8 +72,9 @@ configure_windows_unwind(agc_command_tests)
 if(BUILD_TESTING)
     set_target_properties(agc_command_tests PROPERTIES EXCLUDE_FROM_ALL OFF)
     add_test(NAME agc_initialization COMMAND agc_command_tests defaults)
+    add_test(NAME agc_commands COMMAND agc_command_tests)
     if(WIN32)
-        set_tests_properties(agc_initialization PROPERTIES ENVIRONMENT_MODIFICATION
+        set_tests_properties(agc_initialization agc_commands PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
 endif()
@@ -124,6 +125,25 @@ if(BUILD_TESTING)
     endif()
 endif()
 
+add_test_executable(agc_cb_cond_write_tests EXCLUDE_FROM_ALL
+        tests/CbCondWrite.cpp
+        Command/src/Packet.cpp
+        Command/src/Memory.cpp
+        Command/src/Control.cpp
+        Cb/src/Branch.cpp
+)
+target_include_directories(agc_cb_cond_write_tests PRIVATE ${LIBS_INCLUDE_DIR})
+target_link_libraries(agc_cb_cond_write_tests PRIVATE libc)
+configure_windows_unwind(agc_cb_cond_write_tests)
+if(BUILD_TESTING)
+    set_target_properties(agc_cb_cond_write_tests PROPERTIES EXCLUDE_FROM_ALL FALSE)
+    add_test(NAME agc_cb_cond_write_tests COMMAND agc_cb_cond_write_tests)
+    if(WIN32)
+        set_tests_properties(agc_cb_cond_write_tests PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+endif()
+
 add_test_executable(agc_payload_range_tests EXCLUDE_FROM_ALL tests/PayloadRange.cpp)
 target_include_directories(agc_payload_range_tests PRIVATE ${LIBS_INCLUDE_DIR})
 target_link_libraries(agc_payload_range_tests PRIVATE libSceAgc libc)
@@ -133,6 +153,19 @@ if(BUILD_TESTING)
     add_test(NAME agc_payload_range_tests COMMAND agc_payload_range_tests)
     if(WIN32)
         set_tests_properties(agc_payload_range_tests PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+endif()
+
+add_test_executable(agc_end_of_shader_action_size_tests EXCLUDE_FROM_ALL tests/EndOfShaderActionSize.cpp)
+target_include_directories(agc_end_of_shader_action_size_tests PRIVATE ${LIBS_INCLUDE_DIR})
+target_link_libraries(agc_end_of_shader_action_size_tests PRIVATE libSceAgc libc)
+configure_windows_unwind(agc_end_of_shader_action_size_tests)
+if(BUILD_TESTING)
+    set_target_properties(agc_end_of_shader_action_size_tests PROPERTIES EXCLUDE_FROM_ALL FALSE)
+    add_test(NAME agc_end_of_shader_action_size_tests COMMAND agc_end_of_shader_action_size_tests)
+    if(WIN32)
+        set_tests_properties(agc_end_of_shader_action_size_tests PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
 endif()
@@ -265,6 +298,26 @@ if(BUILD_TESTING)
     endif()
 endif()
 
+add_test_executable(agc_write_data_patch_tests EXCLUDE_FROM_ALL
+        tests/WriteDataPatch.cpp
+        Command/src/Packet.cpp
+        Command/src/Memory.cpp
+        Acb/src/Memory.cpp
+        DcbFlow/src/Memory.cpp
+        Patch/src/WaitRegMem.cpp
+)
+target_include_directories(agc_write_data_patch_tests PRIVATE ${LIBS_INCLUDE_DIR})
+target_link_libraries(agc_write_data_patch_tests PRIVATE libc)
+configure_windows_unwind(agc_write_data_patch_tests)
+if(BUILD_TESTING)
+    set_target_properties(agc_write_data_patch_tests PROPERTIES EXCLUDE_FROM_ALL FALSE)
+    add_test(NAME agc_write_data_patch_tests COMMAND agc_write_data_patch_tests)
+    if(WIN32)
+        set_tests_properties(agc_write_data_patch_tests PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+endif()
+
 add_test_executable(agc_prime_utcl2_tests EXCLUDE_FROM_ALL
         tests/PrimeUtcl2.cpp
         Command/src/Packet.cpp
@@ -291,6 +344,7 @@ add_test_executable(agc_cond_exec_patch_tests EXCLUDE_FROM_ALL
         Command/src/Memory.cpp
         Command/src/Control.cpp
         DcbFlow/src/Sync.cpp
+        Acb/src/Sync.cpp
         Patch/src/CondExec.cpp
 )
 target_include_directories(agc_cond_exec_patch_tests PRIVATE ${LIBS_INCLUDE_DIR})

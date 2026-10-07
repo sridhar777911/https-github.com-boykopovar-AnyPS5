@@ -34,6 +34,10 @@ VkSamplerAddressMode toVkAddressMode(std::uint32_t raw) {
     }
 }
 
+bool readsBorderColor(std::uint32_t raw) {
+    return raw >= 4u && raw <= 7u;
+}
+
 float toSignedLodBias(std::uint32_t raw) {
     const auto extended = static_cast<std::int32_t>((raw ^ 0x2000u) - 0x2000u);
     return static_cast<float>(extended) / 256.0f;
@@ -113,7 +117,10 @@ GuestSamplerResource DecodeSamplerResource(std::span<const std::uint32_t> words)
         case 0: border = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK; break;
         case 1: border = VK_BORDER_COLOR_INT_OPAQUE_BLACK; break;
         case 2: border = VK_BORDER_COLOR_INT_OPAQUE_WHITE; break;
-        default: throw std::runtime_error("AGC graphics: guest sampler descriptor uses a border color table which is not implemented");
+        default:
+            if (readsBorderColor(clampX) || readsBorderColor(clampY) || readsBorderColor(clampZ)) throw std::runtime_error("AGC graphics: guest sampler descriptor uses a border color table which is not implemented");
+            border = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
+            break;
     }
 
     GuestSamplerResource result{};

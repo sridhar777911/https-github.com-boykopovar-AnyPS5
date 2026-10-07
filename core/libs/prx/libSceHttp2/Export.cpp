@@ -214,23 +214,24 @@ int APS5_VABI sceHttp2GetMemoryPoolStats() {
     return 0;
 }
 
-int APS5_VABI sceHttp2CookieFlush(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceHttp2CookieFlush(int id) {
+    (void)id;
     return 0;
 }
 
-int APS5_VABI sceHttp2CreateCookieBox(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceHttp2CreateCookieBox(int lib_http2_ctx_id) {
+    (void)lib_http2_ctx_id;
+    return g_nextHandle.fetch_add(1, std::memory_order_relaxed);
+}
+
+int APS5_VABI sceHttp2SetCookieBox(int id, int cookie_box_id) {
+    (void)id;
+    (void)cookie_box_id;
     return 0;
 }
 
-int APS5_VABI sceHttp2SetCookieBox(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
-}
-
-int APS5_VABI sceHttp2SetRequestNoContentLength(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceHttp2SetRequestNoContentLength(int id) {
+    (void)id;
     return 0;
 }
 
