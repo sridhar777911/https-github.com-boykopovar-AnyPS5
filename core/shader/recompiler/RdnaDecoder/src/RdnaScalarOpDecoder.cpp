@@ -39,6 +39,8 @@ RdnaOpcode decodeSop1Opcode(std::uint32_t opcode) {
         case 0x1eu: return RdnaOpcode::SBitset1B64;
         case 0x1fu: return RdnaOpcode::SGetpcB64;
         case 0x20u: return RdnaOpcode::SSetpcB64;
+        case 0x21u: return RdnaOpcode::SSwappcB64;
+        case 0x22u: throw std::invalid_argument("s_rfe_b64 (SOP1 0x22) returns from a hardware trap handler and cannot appear in shader code");
         case 0x24u: return RdnaOpcode::SAndSaveexecB64;
         case 0x25u: return RdnaOpcode::SOrSaveexecB64;
         case 0x26u: return RdnaOpcode::SXorSaveexecB64;
@@ -179,6 +181,7 @@ RdnaOpcode decodeSopkOpcode(std::uint32_t opcode) {
         case 0x12u: return RdnaOpcode::SGetregB32;
         case 0x13u: return RdnaOpcode::SSetregB32;
         case 0x15u: return RdnaOpcode::SSetregImm32B32;
+        case 0x16u: throw std::invalid_argument("s_call_b64 (SOPK 0x16) links the pc into SDST and branches to PC + 4 + signext(SIMM16) * 4; hardware calls with an implicit link pair are not modeled");
         case 0x17u: return RdnaOpcode::SWaitcnt;
         case 0x18u: return RdnaOpcode::SWaitcnt;
         case 0x19u: return RdnaOpcode::SWaitcnt;
@@ -256,6 +259,7 @@ std::uint32_t scalarDestinationDwordCount(RdnaOpcode opcode) {
         case RdnaOpcode::SBitset0B64:
         case RdnaOpcode::SBitset1B64:
         case RdnaOpcode::SGetpcB64:
+        case RdnaOpcode::SSwappcB64:
         case RdnaOpcode::SAndSaveexecB64:
         case RdnaOpcode::SOrSaveexecB64:
         case RdnaOpcode::SXorSaveexecB64:
