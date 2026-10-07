@@ -24,6 +24,11 @@ class Recorder;
 
 void FlushCachedTextures(VkDevice device);
 void ClearCachedTextures(VkDevice device);
+struct LookupMemoCounts {
+    std::uint64_t hits;
+    std::uint64_t misses;
+};
+LookupMemoCounts LookupMemoCounters();
 
 // The cached storage image of a surface (render targets use it as their resident image); brought up
 // to date with guest memory before it is returned.
@@ -65,6 +70,8 @@ public:
     // dedicated pool, as before).
     SetAllocation Allocate(VkDescriptorSetLayout layout, std::span<const VkDescriptorPoolSize> sizes);
     void Free(const SetAllocation& allocation) noexcept;
+    SetAllocation AllocateRewritten(VkDescriptorSetLayout layout, std::span<const VkDescriptorPoolSize> sizes);
+    void Recycle(VkDescriptorSetLayout layout, const SetAllocation& allocation) noexcept;
     // APS5_PROFILE_DRAW counters: layouts served from the map / created, sets allocated, pools opened.
     struct Stats {
         std::uint64_t layoutHits = 0;
@@ -82,6 +89,7 @@ private:
     mutable std::mutex mutex;
     std::map<std::vector<std::uint32_t>, VkDescriptorSetLayout> layouts;
     std::vector<VkDescriptorPool> pools;
+    std::unordered_map<VkDescriptorSetLayout, std::vector<SetAllocation>> recycled;
     Stats stats;
 };
 
@@ -110,8 +118,12 @@ public:
         struct Snapshot {
             std::uint64_t address;
             std::shared_ptr<Buffer> buffer;
+            VkDeviceSize offset = 0;
+            std::size_t bytes = 0;
+            std::span<std::byte> Bytes() const { return buffer->Bytes().subspan(static_cast<std::size_t>(offset), bytes); }
         };
         DescriptorCache* cache = nullptr;
+        VkDescriptorSetLayout layout = VK_NULL_HANDLE;
         DescriptorCache::SetAllocation allocation;
         std::vector<Snapshot> snapshots;
         ~DrawBindings();
@@ -424,6 +436,22 @@ private:
     std::uint64_t pendingSerialSeen = 0;
     // The import table's identity when the direct regions' serials were last proved.
     HostImportsProof importsProof;
+    struct RangeStamp {
+        std::uint64_t address;
+        std::size_t bytes;
+        std::uint64_t generation;
+    };
+    struct LookupMemo {
+        std::uint64_t epoch = 0;
+        std::uint64_t unwatched = 0;
+        std::uint64_t pendingSerial = 0;
+        std::uint64_t registryGeneration = 0;
+        std::vector<RangeStamp> stamps;
+        std::vector<const StorageTexture*> images;
+        bool keysKept = true;
+    };
+    LookupMemo lookupMemo;
+    bool lookupMemoHolds(std::uint64_t serialBefore);
     // FNV-1a offset basis: the hash of no data buffers (DataWordsHash).
     std::uint64_t dataWordsHash = 14695981039346656037ull;
     void rehashDataWords();
