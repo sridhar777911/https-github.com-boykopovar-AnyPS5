@@ -141,6 +141,7 @@ private:
         append(key, value.earlyZ);
         append(key, value.executeOnNoop);
         append(key, value.conservativeZExport);
+        append(key, value.quadPixelMask);
         append(key, value.targetOutputMode);
         append(key, value.targetExportMapping);
     }
@@ -157,6 +158,7 @@ private:
         append(key, value.fetchAttribReg);
         append(key, value.fetchBufferReg);
         append(key, value.fetchEmbedded);
+        append(key, value.paClVsOutCntl);
         if (value.resourcesNum > value.resources.size()) throw std::runtime_error("Shader cache: invalid vertex resource count");
         for (std::uint32_t i = 0; i < value.resourcesNum; ++i) {
             append(key, value.resources[i].fields[1] & 0xffff0000u);
