@@ -125,22 +125,9 @@ BindingAllocationResult BindingAllocator::Allocate(IrProgram& program, const Bin
         }
         resources.insert(resources.end(), count, i);
     };
-    // A bindless table's slots follow their root as consecutive elements: the SPIR-V indexes the
-    // binding with element(root) + slot.
     for (std::uint32_t i = 0; i < info.images.size(); i++) {
-        const auto root = info.images[i].indirectRoot;
-        if (root != ImageResource::NoIndirectImage && root != i) {
-            continue;
-        }
-        place(i);
-        if (root != i) {
-            continue;
-        }
-        for (const auto slot : info.images[i].indirectResources) {
-            if (slot >= info.images.size() || info.images[slot].indirectRoot != i) {
-                fail("shader binding layout failed: image " + std::to_string(i) + " has an inconsistent table slot");
-            }
-            if (slot != i) place(slot);
+        if (info.images[i].tableView == NoTableView) {
+            place(i);
         }
     }
     for (std::uint32_t i = 0; i < imageGroups.size(); i++) {
@@ -149,27 +136,42 @@ BindingAllocationResult BindingAllocator::Allocate(IrProgram& program, const Bin
         }
     }
 
-    if (!info.samplers.empty()) {
-        std::vector<std::uint32_t> resources(info.samplers.size());
-        for (std::uint32_t i = 0; i < resources.size(); i++) {
-            resources[i] = i;
+    std::vector<std::uint32_t> samplers;
+    for (std::uint32_t i = 0; i < info.samplers.size(); i++) {
+        if (info.samplers[i].tableView == NoTableView) {
+            samplers.push_back(i);
         }
-        addBinding(next, DescriptorBindingKind::Samplers, std::move(resources));
+    }
+    if (!samplers.empty()) {
+        addBinding(next, DescriptorBindingKind::Samplers, std::move(samplers));
     }
     if (usesGds(program)) {
         addBinding(next, DescriptorBindingKind::Gds);
     }
     if (info.usesDma) {
         addBinding(next, DescriptorBindingKind::BdaPagetable);
+    }
+    if (info.usesDma || info.usesFaultBuffer) {
         addBinding(next, DescriptorBindingKind::FaultBuffer);
     }
 
-    const bool usesFlattenedRuntime = !program.Resources().srtReads.empty() ||
-        std::ranges::any_of(info.images, [](const ImageResource& image) {
-            return image.indirectSearchIterations != 0u;
-        });
-    if (usesFlattenedRuntime) {
+    if (!program.Resources().srtReads.empty()) {
         addBinding(next, DescriptorBindingKind::FlattenedSrt);
+    }
+    const bool imageTable = std::ranges::any_of(info.tableViews, [](const TableView& view) {
+        return !view.sampler && view.classes != 0u;
+    });
+    const bool samplerTable = std::ranges::any_of(info.tableViews, [](const TableView& view) {
+        return view.sampler && view.classes != 0u;
+    });
+    if (imageTable) {
+        addBinding(next, DescriptorBindingKind::ImageTable);
+    }
+    if (samplerTable) {
+        addBinding(next, DescriptorBindingKind::SamplerTable);
+    }
+    if (!info.tableViews.empty()) {
+        addBinding(next, DescriptorBindingKind::ImageTableMap);
     }
 
     if (next.ShaderDataDwords() != 0u && !next.UsesPushData()) {
