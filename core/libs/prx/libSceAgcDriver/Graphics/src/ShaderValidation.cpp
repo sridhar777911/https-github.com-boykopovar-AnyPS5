@@ -120,6 +120,10 @@ struct Module {
         if (vertex && storage == spv::StorageClassInput) {
             Require((value == spv::BuiltInVertexIndex || value == spv::BuiltInInstanceIndex) && signature == "i32", "unsupported vertex built-in input");
         } else if (vertex && storage == spv::StorageClassOutput) {
+            if (value == spv::BuiltInClipDistance || value == spv::BuiltInCullDistance) {
+                Require(signature.starts_with("f32[") && signature.size() == 6 && signature[4] >= '1' && signature[4] <= '8', "unsupported vertex clip or cull distance output");
+                return;
+            }
             Require(value == spv::BuiltInPosition && signature == "f32x4" && !position, "unsupported or duplicate vertex built-in output");
             position = true;
         } else {
@@ -215,6 +219,7 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
                     capability == spv::CapabilityImageQuery ||
                     (fragment && geometryShader && capability == spv::CapabilityGeometry) ||
                     (fragment && sampleRateShading && capability == spv::CapabilitySampleRateShading) ||
+                    (vertex && (capability == spv::CapabilityClipDistance || capability == spv::CapabilityCullDistance)) ||
                     capability == spv::CapabilityStorageImageWriteWithoutFormat ||
                     capability == spv::CapabilityStorageImageReadWithoutFormat ||
                     capability == spv::CapabilityInt64 ||
