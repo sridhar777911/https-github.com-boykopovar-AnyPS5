@@ -35,6 +35,8 @@ jobs:
       - name: Install lavapipe for the GPU execution tests
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvulkan1 mesa-vulkan-drivers
       - run: cmake -S . -B build $CONFIGURE
+      - name: Check that every test executable is registered with ctest
+        run: python3 tools/check_test_registration.py build
       - run: cmake --build build
       - run: cmake --build build --target libs
       - run: ctest --test-dir build --output-on-failure --timeout 120 --repeat until-fail:3
@@ -73,6 +75,9 @@ jobs:
           evict-old-files: job
       - shell: cmd
         run: cmake -S . -B build %CONFIGURE%
+      - name: Check that every test executable is registered with ctest
+        shell: cmd
+        run: python tools/check_test_registration.py build
       - shell: cmd
         run: cmake --build build
       - shell: cmd
