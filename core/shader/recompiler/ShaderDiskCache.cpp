@@ -63,24 +63,25 @@ std::filesystem::path ShaderCacheDirectory() {
 namespace ShaderRecompiler::ShaderDiskCache {
 
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
-static_assert(sizeof(RecompileResult) == 176, "RecompileResult changed: update EncodeResult and DecodeResult");
-static_assert(sizeof(DescriptorBinding) == 448, "DescriptorBinding changed: update the binding encoder");
+static_assert(sizeof(RecompileResult) == 240, "RecompileResult changed: update EncodeResult and DecodeResult");
+static_assert(sizeof(DescriptorBinding) == 472, "DescriptorBinding changed: update the binding encoder");
 static_assert(sizeof(VertexAttribute) == 28, "VertexAttribute changed: update the attribute encoder");
 static_assert(sizeof(FragmentParameter) == 12, "FragmentParameter changed: update the parameter encoder");
-static_assert(sizeof(CompiledShaderInfo) == 304, "CompiledShaderInfo changed: update the info encoder");
-static_assert(sizeof(ShaderInfo) == 200, "ShaderInfo changed: update the info encoder");
+static_assert(sizeof(CompiledShaderInfo) == 336, "CompiledShaderInfo changed: update the info encoder");
+static_assert(sizeof(ShaderInfo) == 232, "ShaderInfo changed: update the info encoder");
 static_assert(sizeof(BufferResource) == 36, "BufferResource changed: update the info encoder");
-static_assert(sizeof(ImageResource) == 96, "ImageResource changed: update the info encoder");
-static_assert(sizeof(SamplerResource) == 12, "SamplerResource changed: update the info encoder");
-static_assert(sizeof(SampledResourcePair) == 12, "SampledResourcePair changed: update the info encoder");
+static_assert(sizeof(ImageResource) == 60, "ImageResource changed: update the info encoder");
+static_assert(sizeof(SamplerResource) == 16, "SamplerResource changed: update the info encoder");
+static_assert(sizeof(SampledResourcePair) == 16, "SampledResourcePair changed: update the info encoder");
+static_assert(sizeof(TableView) == 16, "TableView changed: update the info encoder");
 static_assert(sizeof(StageInput) == 56, "StageInput changed: update the info encoder");
 static_assert(sizeof(StageOutput) == 48, "StageOutput changed: update the info encoder");
 static_assert(sizeof(IrBindingLayout) == 64, "IrBindingLayout changed: update the layout encoder");
 static_assert(sizeof(IrDescriptorBinding) == 32, "IrDescriptorBinding changed: update the layout encoder");
 static_assert(sizeof(BindingAllocationResult) == 120, "BindingAllocationResult changed: update the allocation encoder");
-static_assert(sizeof(ResourceSpecialization) == 72, "ResourceSpecialization changed: update BuildKey");
+static_assert(sizeof(ResourceSpecialization) == 120, "ResourceSpecialization changed: update BuildKey");
 static_assert(sizeof(ResourceSpecialization::Buffer) == 16, "ResourceSpecialization::Buffer changed: update BuildKey");
-static_assert(sizeof(ResourceSpecialization::Image) == 48, "ResourceSpecialization::Image changed: update BuildKey");
+static_assert(sizeof(ResourceSpecialization::Image) == 36, "ResourceSpecialization::Image changed: update BuildKey");
 static_assert(sizeof(BindingLayout) == 16, "BindingLayout changed: update BuildKey");
 #endif
 
@@ -250,6 +251,7 @@ void encodeBinding(Writer& writer, const DescriptorBinding& binding) {
     writer.Flags(binding.imageDepthCompare);
     writer.Flags(binding.imageAtomic);
     writer.Flags(binding.imageAtomic64);
+    writer.List(binding.imageShapes, [](Writer& out, DescriptorImageShape shape) { out.Value(shape); });
     writer.Flags(binding.bufferAtomic);
     writer.Flags(binding.bufferWritten);
     writer.Flags(binding.samplerUnnormalized);
@@ -273,6 +275,7 @@ void decodeBinding(Reader& reader, DescriptorBinding& binding) {
     reader.Flags(binding.imageDepthCompare);
     reader.Flags(binding.imageAtomic);
     reader.Flags(binding.imageAtomic64);
+    reader.List(binding.imageShapes, 4, [](Reader& in, DescriptorImageShape& shape) { in.Value(shape); });
     reader.Flags(binding.bufferAtomic);
     reader.Flags(binding.bufferWritten);
     reader.Flags(binding.samplerUnnormalized);
@@ -419,10 +422,7 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
         out.Value(image.packed);
         out.Value(image.packedFormat);
         out.Value(image.emulatedCompare);
-        out.Value(image.indirectRoot);
-        out.Value(image.indirectMappingOffset);
-        out.Value(image.indirectSearchIterations);
-        out.Values(std::span<const std::uint32_t>(image.indirectResources));
+        out.Value(image.tableView);
     });
     writer.List(info.samplers, [](Writer& out, const SamplerResource& sampler) {
         out.Value(sampler.source);
@@ -430,11 +430,21 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
         out.Value(sampler.forcePointFiltering);
         out.Value(sampler.depthCompare);
         out.Value(sampler.uses);
+        out.Value(sampler.tableView);
     });
     writer.List(info.sampledPairs, [](Writer& out, const SampledResourcePair& pair) {
         out.Value(pair.image);
         out.Value(pair.sampler);
         out.Value(pair.firstUsePc);
+        out.Value(pair.pointSampler);
+    });
+    writer.List(info.tableViews, [](Writer& out, const TableView& view) {
+        out.Value(view.source);
+        out.Value(view.sampler);
+        out.Value(view.dimension);
+        out.Value(view.depthCompare);
+        out.Value(view.r128);
+        out.Value(view.classes);
     });
     writer.List(info.inputs, [](Writer& out, const StageInput& input) {
         out.Value(input.kind);
@@ -459,6 +469,7 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
     writer.Value(info.hasBitwiseXor);
     writer.Value(info.usesDma);
     writer.Value(info.bdaWrites);
+    writer.Value(info.usesFaultBuffer);
     writer.Value(info.dispatchThreadLimit);
     encodeLayout(writer, compiled.bindings);
 }
@@ -489,7 +500,7 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
         in.Value(buffer.scalar);
         in.Value(buffer.empty);
     });
-    reader.List(info.images, 63, [](Reader& in, ImageResource& image) {
+    reader.List(info.images, 52, [](Reader& in, ImageResource& image) {
         in.Value(image.source);
         in.Value(image.firstUsePc);
         in.Value(image.resourceClass);
@@ -512,22 +523,29 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
         in.Value(image.packed);
         in.Value(image.packedFormat);
         in.Value(image.emulatedCompare);
-        in.Value(image.indirectRoot);
-        in.Value(image.indirectMappingOffset);
-        in.Value(image.indirectSearchIterations);
-        in.Values(image.indirectResources);
+        in.Value(image.tableView);
     });
-    reader.List(info.samplers, 11, [](Reader& in, SamplerResource& sampler) {
+    reader.List(info.samplers, 15, [](Reader& in, SamplerResource& sampler) {
         in.Value(sampler.source);
         in.Value(sampler.firstUsePc);
         in.Value(sampler.forcePointFiltering);
         in.Value(sampler.depthCompare);
         in.Value(sampler.uses);
+        in.Value(sampler.tableView);
     });
-    reader.List(info.sampledPairs, 12, [](Reader& in, SampledResourcePair& pair) {
+    reader.List(info.sampledPairs, 16, [](Reader& in, SampledResourcePair& pair) {
         in.Value(pair.image);
         in.Value(pair.sampler);
         in.Value(pair.firstUsePc);
+        in.Value(pair.pointSampler);
+    });
+    reader.List(info.tableViews, 12, [](Reader& in, TableView& view) {
+        in.Value(view.source);
+        in.Value(view.sampler);
+        in.Value(view.dimension);
+        in.Value(view.depthCompare);
+        in.Value(view.r128);
+        in.Value(view.classes);
     });
     reader.List(info.inputs, 21, [](Reader& in, StageInput& input) {
         in.Value(input.kind);
@@ -552,6 +570,7 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
     reader.Value(info.hasBitwiseXor);
     reader.Value(info.usesDma);
     reader.Value(info.bdaWrites);
+    reader.Value(info.usesFaultBuffer);
     reader.Value(info.dispatchThreadLimit);
     decodeLayout(reader, compiled.bindings);
 }
@@ -820,9 +839,6 @@ void BuildKey(const RecompileRequest& request, std::uint32_t hostSubgroupSize, c
         out.Value(image.mipCount);
         out.Value(image.conversionFormat);
         out.Value(image.shaderSwizzle);
-        out.Value(image.indirectRoot);
-        out.Value(image.indirectMappingOffset);
-        out.Value(image.indirectSearchIterations);
         out.Value(image.cube);
         out.Value(image.fmask);
         out.Value(image.depthBits);
@@ -831,7 +847,13 @@ void BuildKey(const RecompileRequest& request, std::uint32_t hostSubgroupSize, c
         out.Value(image.emulatedCompare);
         out.Value(image.srgbDecode);
     });
+    writer.Values(std::span<const std::uint8_t>(specialization.tableViewClasses));
     writer.Values(std::span<const std::uint32_t>(specialization.boundDescriptors));
+    writer.List(specialization.srtPoison, [](Writer& out, const SrtReadPoison& poison) {
+        out.Value(poison.slot);
+        out.Value(poison.pc);
+        out.Value(poison.address);
+    });
     const auto& switches = switchKey();
     key.insert(key.end(), switches.begin(), switches.end());
 }

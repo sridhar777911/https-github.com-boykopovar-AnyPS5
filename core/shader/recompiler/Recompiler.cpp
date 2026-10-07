@@ -346,7 +346,7 @@ CompiledVariant compileVariant(const RecompileRequest& request, IrProgram progra
         throw;
     }
 
-    result.bdaAbiVersion = program.Info().usesDma ? request.target.bdaAbiVersion : 0u;
+    result.bdaAbiVersion = program.Info().usesDma || program.Info().usesFaultBuffer ? request.target.bdaAbiVersion : 0u;
     result.memoryOffsetDword = bindings.layout.memoryOffsetDword;
     result.hostSubgroupSize = HostSubgroupSize(request);
     result.vertexOffsetSgpr = program.Info().vertexOffsetSgpr;
@@ -385,6 +385,14 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
     DescriptorBindingBuilder{}.Populate(bindings, variant.info.info, variant.info.stage, variant.info.userDataBase, snapshot, partialThreads(request));
     result.bindings = std::move(bindings.bindings);
     result.pushConstants = std::move(bindings.pushConstants);
+    result.imageTablePoison.clear();
+    for (const auto& poison : snapshot.tables.poison) {
+        result.imageTablePoison.push_back({poison.address, poison.words.dwords, poison.words.dwordCount, poison.view, static_cast<std::uint32_t>(poison.reason)});
+    }
+    result.imageTableRanges.clear();
+    for (const auto& range : snapshot.tables.ranges) result.imageTableRanges.emplace_back(range.base, range.size);
+    result.imageTableShader = snapshot.tables.shader;
+    result.poisonedSrtReads = static_cast<std::uint32_t>(variant.specialization.srtPoison.size());
     for (auto& attribute : result.vertexAttributes) {
         if (!request.context.vertex || attribute.location >= request.context.vertex->resourcesNum) throw std::runtime_error("Shader cache: invalid vertex attribute metadata");
         attribute.resource = request.context.vertex->resources[attribute.location];
@@ -518,12 +526,13 @@ std::uint64_t snapshotHash(const RecompileRequest& request, const ResourceSnapsh
         mix(words.size());
         for (const auto word : words) mix(word);
     };
+    const auto mixDescriptor = [&](const DescriptorValue& value) {
+        mix(value.dwordCount);
+        for (std::uint32_t i = 0; i < value.dwordCount && i < value.dwords.size(); ++i) mix(value.dwords[i]);
+    };
     const auto mixDescriptors = [&](const std::vector<DescriptorValue>& values) {
         mix(values.size());
-        for (const auto& value : values) {
-            mix(value.dwordCount);
-            for (std::uint32_t i = 0; i < value.dwordCount && i < value.dwords.size(); ++i) mix(value.dwords[i]);
-        }
+        for (const auto& value : values) mixDescriptor(value);
     };
     mixDescriptors(snapshot.buffers);
     mixDescriptors(snapshot.images);
@@ -535,6 +544,33 @@ std::uint64_t snapshotHash(const RecompileRequest& request, const ResourceSnapsh
     for (const auto stride : snapshot.uniformFill.groupStride) mix(stride);
     mix(snapshot.uniformFill.words);
     mix(snapshot.uniformFill.value);
+    const auto& tables = snapshot.tables;
+    mix(tables.shader);
+    mix(tables.images.size());
+    for (const auto& image : tables.images) {
+        mixDescriptor(image.words);
+        mix(static_cast<std::uint64_t>(image.dimension));
+        mix(static_cast<std::uint64_t>(image.numericClass));
+        mix(image.depthCompare ? 1u : 0u);
+    }
+    mix(tables.samplers.size());
+    for (const auto& sampler : tables.samplers) {
+        mixDescriptor(sampler.words);
+        mix((sampler.compare ? 1u : 0u) | (sampler.point ? 2u : 0u));
+    }
+    mix(tables.poison.size());
+    for (const auto& poison : tables.poison) {
+        mix(poison.address);
+        mixDescriptor(poison.words);
+        mix(poison.view);
+        mix(static_cast<std::uint64_t>(poison.reason));
+    }
+    mixWords(tables.map);
+    mix(tables.ranges.size());
+    for (const auto& range : tables.ranges) {
+        mix(range.base);
+        mix(range.size);
+    }
     for (const auto threads : partialThreads(request)) mix(threads);
     if (request.context.vertex) {
         const auto& vertex = *request.context.vertex;

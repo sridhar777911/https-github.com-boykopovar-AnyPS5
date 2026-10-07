@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ShaderRecompiler {
@@ -303,7 +304,10 @@ enum class DescriptorRole {
     BdaPagetable,
     FaultBuffer,
     FlattenedSrt,
-    ShaderData
+    ShaderData,
+    ImageTable,
+    SamplerTable,
+    ImageTableMap
 };
 
 struct DescriptorBinding {
@@ -321,6 +325,7 @@ struct DescriptorBinding {
     std::vector<bool> imageDepthCompare;
     std::vector<bool> imageAtomic;
     std::vector<bool> imageAtomic64;
+    std::vector<DescriptorImageShape> imageShapes;
     // Guest buffer elements the shader updates atomically (one entry per element of a GuestBuffers
     // binding, empty otherwise). An atomic on a host-imported range is a serialized PCIe round trip
     // (~0.4-0.5 us each on NVIDIA), so a driver may keep these elements in device-local memory.
@@ -334,6 +339,14 @@ struct DescriptorBinding {
     std::vector<bool> samplerUnnormalized;
     std::vector<bool> imageUnnormalized;
     std::vector<std::uint32_t> imageSamplers;
+};
+
+struct ImageTableEntryPoison {
+    std::uint64_t address = 0;
+    std::array<std::uint32_t, 8> words{};
+    std::uint32_t dwordCount = 0;
+    std::uint32_t view = 0;
+    std::uint32_t reason = 0;
 };
 
 struct VertexAttribute {
@@ -418,6 +431,10 @@ struct RecompileResult {
     // Identifies the compiled variant the result came from: equal ids mean identical SPIR-V and
     // bindings, so drivers can reuse pipeline objects. Zero when unknown.
     std::uint64_t variantId = 0;
+    std::vector<ImageTableEntryPoison> imageTablePoison;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> imageTableRanges;
+    std::uint64_t imageTableShader = 0;
+    std::uint32_t poisonedSrtReads = 0;
 };
 
 [[nodiscard]] RecompileResult Recompile(const RecompileRequest& request);

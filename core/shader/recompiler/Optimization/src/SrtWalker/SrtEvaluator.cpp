@@ -13,6 +13,28 @@
 
 namespace ShaderRecompiler::Detail {
 
+namespace {
+
+bool LoadedFromMemory(const IrValue& handle) {
+    std::vector<const IrValue*> pending;
+    std::vector<const IrValue*> visited;
+    for (std::size_t index = 0; index < handle.ArgumentCount(); ++index) pending.push_back(handle.Argument(index));
+    while (!pending.empty()) {
+        const IrValue* value = pending.back();
+        pending.pop_back();
+        if (value == nullptr) continue;
+        value = value->Resolve();
+        if (value->HasImmediate() || std::find(visited.begin(), visited.end(), value) != visited.end()) continue;
+        visited.push_back(value);
+        const auto opcode = value->Opcode();
+        if (opcode == IrOpcode::ReadConst || opcode == IrOpcode::LoadAddressU32 || opcode == IrOpcode::ReadConstBuffer) return true;
+        for (std::size_t index = 0; index < value->ArgumentCount(); ++index) pending.push_back(value->Argument(index));
+    }
+    return false;
+}
+
+}
+
 bool Evaluator::Evaluate(IrValue* value, std::uint32_t& result) {
     std::uint64_t wide = 0;
     if (!EvaluateWide(value, wide)) {
@@ -152,6 +174,10 @@ bool Evaluator::EvaluateRawRead(IrValue& inst, std::uint64_t& result) {
             return false;
         }
     }
+    if (_inaccessible != nullptr && _runtime.accessible != nullptr && !_runtime.accessible(_runtime.userContext, address, sizeof(std::uint32_t)) && LoadedFromMemory(*handle)) {
+        *_inaccessible = {&inst, address};
+        return false;
+    }
     if (auto* trace = _runtime.readTrace; trace != nullptr) {
         if (&inst == trace->leaf) trace->leaves.emplace_back(trace->leafSlot, address);
         else trace->otherReads.push_back(address);
@@ -187,6 +213,7 @@ bool Evaluator::EvaluateInst(IrValue& inst, std::uint64_t& result) {
         case IrOpcode::Phi: return EvaluatePhi(inst, result);
         case IrOpcode::ReadFirstLane: {
             Evaluator active(_program, _runtime, _cleanFlatSlots, _cleanEvaluator, inst.Argument(1));
+            active.ReportInaccessibleReads(_inaccessible);
             return active.EvaluateWide(inst.Argument(0), result);
         }
         case IrOpcode::BitCastU32F32:
