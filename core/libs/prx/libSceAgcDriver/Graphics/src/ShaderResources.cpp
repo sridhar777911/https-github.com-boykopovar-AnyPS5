@@ -6,6 +6,7 @@
 #include "prx/libSceAgcDriver/Graphics/include/Recorder.hpp"
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <memory>
 #include <mutex>
 #include <array>
@@ -568,7 +569,7 @@ NullTextures& NullTextureCache() {
     return cache;
 }
 
-std::shared_ptr<Texture> nullTexture(const Context& context, ShaderRecompiler::DescriptorImageShape shape, bool depthCompare) {
+std::shared_ptr<Texture> nullTexture(const Context& context, ShaderRecompiler::DescriptorImageShape shape, bool depthCompare = false) {
     constexpr VkComponentMapping mapping{VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO};
     auto& cache = NullTextureCache();
     std::lock_guard lock(cache.mutex);
@@ -596,6 +597,12 @@ std::shared_ptr<Texture> nullTexture(const Context& context, ShaderRecompiler::D
         texture->MarkNull();
     }
     return texture;
+}
+
+bool compareUnreadable(const GuestTextureResource& resource, bool depthCompare) {
+    if (!depthCompare) return false;
+    const auto format = ResolveTextureFormat(resource.format);
+    return (format != VK_FORMAT_R32_SFLOAT && format != VK_FORMAT_R16_UNORM) || resource.dimension == TextureDimension::k3D;
 }
 
 // `guestBytes` is the surface size when the caller described the surface already (0: described here).
@@ -780,6 +787,24 @@ bool SameAsPreviousStorageElement(const ShaderRecompiler::DescriptorBinding& bin
     if (element == 0) return false;
     const auto words = binding.guestDescriptor.begin() + static_cast<std::size_t>(element) * 8u;
     return std::equal(words, words + 8, words - 8);
+}
+
+std::vector<std::uint32_t> FirstSameSampledElements(const ShaderRecompiler::DescriptorBinding& binding) {
+    std::vector<std::uint32_t> first;
+    if (binding.kind != ShaderRecompiler::DescriptorKind::SampledImage || binding.count <= 64u || binding.guestDescriptor.size() != static_cast<std::size_t>(binding.count) * 8u) return first;
+    first.resize(binding.count);
+    std::unordered_map<std::uint64_t, std::uint32_t> seen;
+    seen.reserve(binding.count);
+    const auto compare = [&](std::uint32_t element) { return !binding.imageDepthCompare.empty() && binding.imageDepthCompare.at(element); };
+    for (std::uint32_t element = 0; element < binding.count; ++element) {
+        const auto words = binding.guestDescriptor.begin() + static_cast<std::size_t>(element) * 8u;
+        std::uint64_t hash = compare(element) ? 0x84222325cbf29ce4ull : 0xcbf29ce484222325ull;
+        for (std::uint32_t i = 0; i < 8u; ++i) hash = (hash ^ words[i]) * 0x100000001b3ull;
+        const auto [found, inserted] = seen.try_emplace(hash, element);
+        const auto earlier = found->second;
+        first[element] = !inserted && compare(earlier) == compare(element) && std::equal(words, words + 8, binding.guestDescriptor.begin() + static_cast<std::size_t>(earlier) * 8u) ? earlier : element;
+    }
+    return first;
 }
 
 }
@@ -1760,10 +1785,18 @@ bool ShaderResources::Revalidate(std::span<const CompiledShader> shaders, ProofR
                 if (binding.role != ShaderRecompiler::DescriptorRole::GuestImages) continue;
                 if (binding.kind == ShaderRecompiler::DescriptorKind::SampledImage) {
                     const auto elementWords = binding.count != 0 ? binding.guestDescriptor.size() / binding.count : 0;
+                    const auto first = FirstSameSampledElements(binding);
+                    const auto bindingTextures = textureIndex;
                     for (std::uint32_t element = 0; element < binding.count; ++element) {
                         const auto words = std::span<const std::uint32_t>(binding.guestDescriptor).subspan(static_cast<std::size_t>(element) * elementWords, elementWords);
-                        if (IsNullTextureDescriptor(words) && binding.imageShape.has_value()) {
-                            if (textureIndex >= textures.size() || nullTexture(context, *binding.imageShape, !binding.imageDepthCompare.empty() && binding.imageDepthCompare.at(element)) != textures[textureIndex]) return false;
+                        if (!first.empty() && first[element] != element) {
+                            if (textureIndex >= textures.size() || textures[bindingTextures + first[element]] != textures[textureIndex]) return false;
+                            ++textureIndex;
+                            continue;
+                        }
+                        const bool compareElement = !binding.imageDepthCompare.empty() && binding.imageDepthCompare.at(element);
+                        if (binding.imageShape.has_value() && (IsNullTextureDescriptor(words) || compareUnreadable(DecodeTextureResource(words), compareElement))) {
+                            if (textureIndex >= textures.size() || nullTexture(context, *binding.imageShape, compareElement) != textures[textureIndex]) return false;
                             ++textureIndex;
                             continue;
                         }
@@ -2173,9 +2206,11 @@ constexpr std::array<VkDescriptorPoolSize, 4> ChainPoolSizes{{{VK_DESCRIPTOR_TYP
 }
 
 DescriptorCache::SetAllocation DescriptorCache::Allocate(VkDescriptorSetLayout layout, std::span<const VkDescriptorPoolSize> sizes) {
+    auto poolSizes = ChainPoolSizes;
     for (const auto& size : sizes) {
-        const auto capacity = std::find_if(ChainPoolSizes.begin(), ChainPoolSizes.end(), [&](const auto& item) { return item.type == size.type; });
-        if (capacity == ChainPoolSizes.end() || size.descriptorCount > capacity->descriptorCount) return {};
+        const auto capacity = std::find_if(poolSizes.begin(), poolSizes.end(), [&](const auto& item) { return item.type == size.type; });
+        if (capacity == poolSizes.end()) return {};
+        if (size.descriptorCount > capacity->descriptorCount) capacity->descriptorCount = std::bit_ceil(size.descriptorCount);
     }
     std::lock_guard lock(mutex);
     const auto allocate = context.Resolved(&DeviceFunctions::allocateDescriptorSets, "vkAllocateDescriptorSets");
@@ -2197,8 +2232,8 @@ DescriptorCache::SetAllocation DescriptorCache::Allocate(VkDescriptorSetLayout l
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.maxSets = ChainPoolSets;
-    poolInfo.poolSizeCount = static_cast<std::uint32_t>(ChainPoolSizes.size());
-    poolInfo.pPoolSizes = ChainPoolSizes.data();
+    poolInfo.poolSizeCount = static_cast<std::uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
     VkDescriptorPool pool = VK_NULL_HANDLE;
     Check(context.Function<PFN_vkCreateDescriptorPool>("vkCreateDescriptorPool")(context.device, &poolInfo, nullptr, &pool), "vkCreateDescriptorPool");
     pools.push_back(pool);
@@ -2500,7 +2535,13 @@ bool ShaderResources::precollectImages() {
     for (const auto& deferred : deferredImages) {
         const auto& binding = *deferred.binding;
         const auto elementWords = binding.guestDescriptor.size() / binding.count;
+        const auto first = FirstSameSampledElements(binding);
+        const auto bindingRecords = imageRecords.size();
         for (std::uint32_t element = 0; element < binding.count; ++element) {
+            if (!first.empty() && first[element] != element) {
+                imageRecords.push_back(imageRecords[bindingRecords + first[element]]);
+                continue;
+            }
             const auto words = std::span<const std::uint32_t>(binding.guestDescriptor).subspan(static_cast<std::size_t>(element) * elementWords, elementWords);
             ImageRecord record;
             record.sampled = binding.kind == ShaderRecompiler::DescriptorKind::SampledImage;
@@ -2599,11 +2640,22 @@ void ShaderResources::resolveImageBinding(const ShaderRecompiler::DescriptorBind
     if (binding.kind == ShaderRecompiler::DescriptorKind::SampledImage) {
         Require(binding.imageSamplers.size() == binding.count, "guest sampled image binding is missing its image-sampler pairs");
         const auto elementWords = binding.guestDescriptor.size() / binding.count;
+        const auto first = FirstSameSampledElements(binding);
+        const auto bindingRanges = describedRanges.size();
         for (std::uint32_t element = 0; element < binding.count; ++element) {
             const auto words = std::span<const std::uint32_t>(binding.guestDescriptor).subspan(static_cast<std::size_t>(element) * elementWords, elementWords);
             const auto* record = nextRecord();
-            if (IsNullTextureDescriptor(words) && binding.imageShape.has_value()) {
-                textures.push_back(nullTexture(context, *binding.imageShape, !binding.imageDepthCompare.empty() && binding.imageDepthCompare.at(element)));
+            if (!first.empty() && first[element] != element) {
+                const auto earlier = item.imageAllocations[first[element]];
+                textures.push_back(textures[earlier]);
+                textureFirstLayer.push_back(textureFirstLayer[earlier]);
+                describedRanges.push_back(describedRanges[bindingRanges + first[element]]);
+                item.imageAllocations.push_back(textures.size() - 1);
+                continue;
+            }
+            const bool compareElement = !binding.imageDepthCompare.empty() && binding.imageDepthCompare.at(element);
+            if (binding.imageShape.has_value() && (IsNullTextureDescriptor(words) || compareUnreadable(record != nullptr && record->decoded ? record->resource : DecodeTextureResource(words), compareElement))) {
+                textures.push_back(nullTexture(context, *binding.imageShape, compareElement));
                 textureFirstLayer.push_back(false);
                 describedRanges.push_back({"texture", 0, 0, 1, 1, 56, 0, 0});
                 item.imageAllocations.push_back(textures.size() - 1);
