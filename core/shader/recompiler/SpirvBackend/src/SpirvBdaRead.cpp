@@ -260,6 +260,10 @@ void DefineBdaByteWriteFunctions(SpirvEmitterState& state) {
     }
 }
 
+bool BdaByteWritesForced() {
+    static const bool forced = std::getenv("APS5_BDA_BYTE_WRITES") != nullptr;
+    return forced;
+}
 void EmitBdaStore(SpirvValueEmitContext& ctx, const IrValue& inst, std::uint32_t address, std::uint32_t value, std::uint32_t bits) {
     auto& state = ctx.state;
     if (bits != 8u && bits != 16u && bits != 32u) ctx.Fail(inst, "unsupported BDA store width");
@@ -274,11 +278,31 @@ void EmitBdaStore(SpirvValueEmitContext& ctx, const IrValue& inst, std::uint32_t
         storeBytes();
         return;
     }
-    const auto unaligned = BdaAddressUnaligned(state, address);
-    EmitIfCondition(state, unaligned, storeBytes);
-    EmitIfCondition(state, Unary(state, spv::OpLogicalNot, TypeBool(state), unaligned), [&] {
-        EmitBdaStoreAt(state, address, 4u, TypePhysicalU32Pointer(state), value, instruction, BdaAccessMask(state, inst));
-    });
+    const auto accessMask = BdaAccessMask(state, inst);
+    if (state.bdaWriteProbeFunction == 0) {
+        storeBytes();
+        return;
+    }
+    const auto physical = state.module.AllocateId();
+    state.module.AddFunction(spv::OpFunctionCall, TypeScalarU64(state), physical, state.bdaWriteProbeFunction, address, ConstantU32(state, 4u), instruction);
+    const auto mapped = Binary(state, spv::OpINotEqual, TypeBool(state), physical, BdaConstant(state, 0u));
+    const auto aligned = Binary(state, spv::OpIEqual, TypeBool(state), Binary(state, spv::OpBitwiseAnd, TypeScalarU64(state), physical, BdaConstant(state, 3u)), BdaConstant(state, 0u));
+    const auto wide = Binary(state, spv::OpLogicalAnd, TypeBool(state), mapped, aligned);
+    const auto wideLabel = state.module.AllocateId();
+    const auto byteLabel = state.module.AllocateId();
+    const auto merge = state.module.AllocateId();
+    state.module.AddFunction(spv::OpSelectionMerge, merge, spv::SelectionControlMaskNone);
+    state.module.AddFunction(spv::OpBranchConditional, wide, wideLabel, byteLabel);
+    EmitLabel(state, wideLabel);
+    const auto pointer = state.module.AllocateId();
+    state.module.AddFunction(spv::OpConvertUToPtr, TypePhysicalU32Pointer(state), pointer, physical);
+    state.module.AddFunction(spv::OpStore, pointer, value, accessMask, 4u);
+    state.module.AddFunction(spv::OpFunctionCall, state.module.Type(spv::OpTypeVoid), state.module.AllocateId(), state.bdaNoteWriteFunction, address);
+    state.module.AddFunction(spv::OpBranch, merge);
+    EmitLabel(state, byteLabel);
+    storeBytes();
+    state.module.AddFunction(spv::OpBranch, merge);
+    EmitLabel(state, merge);
 }
 
 std::uint32_t EmitBdaAtomic(SpirvValueEmitContext& ctx, const IrValue& inst, std::uint32_t address, std::uint32_t bytes, const std::function<std::uint32_t(std::uint32_t)>& operation) {
