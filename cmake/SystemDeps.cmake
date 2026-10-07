@@ -1,24 +1,22 @@
-# Resolves the third-party libraries from the system instead of the bundled
-# submodules when ANYPS5_USE_SYSTEM_DEPS is ON. Every package is required: a
-# missing one fails the configure and nothing falls back to the submodule.
-#
-# The system packages are exposed under the same target names the bundled
-# submodules use (SDL2-static, freetype, glslang, SPIRV, glslang-standalone,
-# SPIRV-Tools-opt, SPIRV-Tools-static) so the rest of the build does not need
-# to know which path was taken.
+set(ANYPS5_VULKAN_HEADERS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/3rdparty/Vulkan-Headers/include")
+set(ANYPS5_SPIRV_HEADERS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/3rdparty/SPIRV-Headers/include")
+set(ANYPS5_SDL2_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/3rdparty/SDL2/include")
+set(ANYPS5_GLSLANG_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/3rdparty/glslang")
 
 if(NOT ANYPS5_USE_SYSTEM_DEPS)
     return()
 endif()
 
 find_package(SDL2 CONFIG REQUIRED)
-# The prx libraries are shared objects, so they need a position-independent
-# SDL2. Distribution static builds are usually not PIC, so link the shared one.
 if(NOT TARGET SDL2::SDL2)
     message(FATAL_ERROR "ANYPS5_USE_SYSTEM_DEPS: SDL2 was found but does not provide SDL2::SDL2")
 endif()
 add_library(SDL2-static INTERFACE)
 target_link_libraries(SDL2-static INTERFACE SDL2::SDL2)
+get_target_property(ANYPS5_SDL2_INCLUDE_DIR SDL2::SDL2 INTERFACE_INCLUDE_DIRECTORIES)
+if(NOT ANYPS5_SDL2_INCLUDE_DIR)
+    message(FATAL_ERROR "ANYPS5_USE_SYSTEM_DEPS: SDL2::SDL2 exposes no INTERFACE_INCLUDE_DIRECTORIES")
+endif()
 
 find_package(Freetype REQUIRED)
 if(NOT TARGET Freetype::Freetype)
@@ -31,9 +29,12 @@ find_package(VulkanHeaders CONFIG REQUIRED)
 if(NOT TARGET Vulkan::Headers)
     message(FATAL_ERROR "ANYPS5_USE_SYSTEM_DEPS: Vulkan-Headers was found but does not provide Vulkan::Headers")
 endif()
-get_target_property(ANYPS5_VULKAN_INCLUDE_DIRS Vulkan::Headers INTERFACE_INCLUDE_DIRECTORIES)
+get_target_property(ANYPS5_VULKAN_HEADERS_INCLUDE_DIR Vulkan::Headers INTERFACE_INCLUDE_DIRECTORIES)
+if(NOT ANYPS5_VULKAN_HEADERS_INCLUDE_DIR)
+    message(FATAL_ERROR "ANYPS5_USE_SYSTEM_DEPS: Vulkan::Headers exposes no INTERFACE_INCLUDE_DIRECTORIES")
+endif()
 include(CheckCXXSourceCompiles)
-set(CMAKE_REQUIRED_INCLUDES ${ANYPS5_VULKAN_INCLUDE_DIRS})
+set(CMAKE_REQUIRED_INCLUDES ${ANYPS5_VULKAN_HEADERS_INCLUDE_DIR})
 check_cxx_source_compiles("#include <vulkan/vulkan.h>\nint main() { VkPhysicalDeviceMaintenance8FeaturesKHR features{}; (void)features; return 0; }" ANYPS5_VULKAN_HAS_MAINTENANCE8)
 unset(CMAKE_REQUIRED_INCLUDES)
 if(NOT ANYPS5_VULKAN_HAS_MAINTENANCE8)
@@ -44,6 +45,10 @@ find_package(SPIRV-Headers CONFIG REQUIRED)
 if(NOT TARGET SPIRV-Headers::SPIRV-Headers)
     message(FATAL_ERROR "ANYPS5_USE_SYSTEM_DEPS: SPIRV-Headers was found but does not provide SPIRV-Headers::SPIRV-Headers")
 endif()
+get_target_property(ANYPS5_SPIRV_HEADERS_INCLUDE_DIR SPIRV-Headers::SPIRV-Headers INTERFACE_INCLUDE_DIRECTORIES)
+if(NOT ANYPS5_SPIRV_HEADERS_INCLUDE_DIR)
+    message(FATAL_ERROR "ANYPS5_USE_SYSTEM_DEPS: SPIRV-Headers::SPIRV-Headers exposes no INTERFACE_INCLUDE_DIRECTORIES")
+endif()
 
 find_package(glslang CONFIG REQUIRED)
 if(NOT TARGET glslang::glslang OR NOT TARGET glslang::SPIRV)
@@ -53,10 +58,6 @@ add_library(glslang INTERFACE)
 target_link_libraries(glslang INTERFACE glslang::glslang)
 add_library(SPIRV INTERFACE)
 target_link_libraries(SPIRV INTERFACE glslang::SPIRV)
-
-# The bundled glslang has both <SPIRV/...> and <glslang/...> under one root; the
-# system install keeps <glslang/...> under <prefix>/include and the rest,
-# including <SPIRV/GlslangToSpv.h>, under <prefix>/include/glslang.
 find_path(ANYPS5_GLSLANG_PUBLIC_INCLUDE_DIR NAMES glslang/Public/ShaderLang.h)
 if(NOT ANYPS5_GLSLANG_PUBLIC_INCLUDE_DIR)
     message(FATAL_ERROR "ANYPS5_USE_SYSTEM_DEPS: glslang/Public/ShaderLang.h was not found; the glslang headers are incomplete")
@@ -65,6 +66,7 @@ set(ANYPS5_GLSLANG_SPIRV_INCLUDE_DIR "${ANYPS5_GLSLANG_PUBLIC_INCLUDE_DIR}/glsla
 if(NOT EXISTS "${ANYPS5_GLSLANG_SPIRV_INCLUDE_DIR}/SPIRV/GlslangToSpv.h")
     message(FATAL_ERROR "ANYPS5_USE_SYSTEM_DEPS: ${ANYPS5_GLSLANG_SPIRV_INCLUDE_DIR}/SPIRV/GlslangToSpv.h was not found")
 endif()
+set(ANYPS5_GLSLANG_INCLUDE_DIRS "${ANYPS5_GLSLANG_PUBLIC_INCLUDE_DIR};${ANYPS5_GLSLANG_SPIRV_INCLUDE_DIR}")
 
 find_program(ANYPS5_GLSLANG_STANDALONE_EXECUTABLE NAMES glslang glslangValidator)
 if(NOT ANYPS5_GLSLANG_STANDALONE_EXECUTABLE)
@@ -80,22 +82,15 @@ if(ANYPS5_ENABLE_SPIRV_TOOLS)
     endif()
 endif()
 
-set(_anyps5_system_include_targets
-        SDL2::SDL2
-        Freetype::Freetype
-        Vulkan::Headers
-        SPIRV-Headers::SPIRV-Headers
-        glslang::glslang
-        glslang::SPIRV
-)
-set(_anyps5_system_includes "")
-foreach(_target IN LISTS _anyps5_system_include_targets)
-    if(TARGET ${_target})
-        get_target_property(_target_includes ${_target} INTERFACE_INCLUDE_DIRECTORIES)
-        if(_target_includes)
-            list(APPEND _anyps5_system_includes ${_target_includes})
-        endif()
+set(ANYPS5_SYSTEM_DEPS_STAMP "")
+list(APPEND ANYPS5_SYSTEM_DEPS_PACKAGES VulkanHeaders SPIRV-Headers glslang)
+if(ANYPS5_ENABLE_SPIRV_TOOLS)
+    list(APPEND ANYPS5_SYSTEM_DEPS_PACKAGES SPIRV-Tools-opt)
+endif()
+foreach(_package IN LISTS ANYPS5_SYSTEM_DEPS_PACKAGES)
+    set(_version "unknown")
+    if(DEFINED ${_package}_VERSION)
+        set(_version "${${_package}_VERSION}")
     endif()
+    string(APPEND ANYPS5_SYSTEM_DEPS_STAMP " ${_package}=${_version}")
 endforeach()
-list(APPEND _anyps5_system_includes ${ANYPS5_GLSLANG_SPIRV_INCLUDE_DIR} ${ANYPS5_GLSLANG_PUBLIC_INCLUDE_DIR})
-include_directories(SYSTEM ${_anyps5_system_includes})

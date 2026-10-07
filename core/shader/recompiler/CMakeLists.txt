@@ -151,8 +151,8 @@ function(add_shader_recompiler target runtimeTarget)
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Translation/include
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Optimization/include
             ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/SpirvBackend/include
-            ${PROJECT_SOURCE_DIR}/3rdparty/SPIRV-Headers/include
-            ${PROJECT_SOURCE_DIR}/3rdparty/glslang
+            ${ANYPS5_SPIRV_HEADERS_INCLUDE_DIR}
+            ${ANYPS5_GLSLANG_INCLUDE_DIRS}
     )
 
     target_compile_features(${target} PUBLIC cxx_std_20)
@@ -205,6 +205,9 @@ function(add_shader_recompiler target runtimeTarget)
     get_target_property(shaderCacheIncludeDirectories ${target} INCLUDE_DIRECTORIES)
     string(TOUPPER "${CMAKE_BUILD_TYPE}" shaderCacheBuildType)
     set(shaderCacheExtra "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} ${CMAKE_BUILD_TYPE} spirv-tools=${ANYPS5_ENABLE_SPIRV_TOOLS} ${CMAKE_SYSTEM_PROCESSOR} flags=${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${shaderCacheBuildType}}")
+    if(ANYPS5_USE_SYSTEM_DEPS)
+        string(APPEND shaderCacheExtra " system-deps=${ANYPS5_SYSTEM_DEPS_STAMP}")
+    endif()
     set(shaderCacheReviewedNames
             BuildRectListShaders
             CaptureResources
