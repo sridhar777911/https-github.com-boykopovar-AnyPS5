@@ -927,8 +927,14 @@ void EmitProgram(SpirvEmitterState& state) {
     if (state.pixelValidMaskVariable != 0u) {
         state.module.AddFunction(spv::OpStore, state.pixelValidMaskVariable, ConstantU32(state, 1u));
     }
+    if (OrderedPixelShader(state)) {
+        state.module.AddFunction(spv::OpBeginInvocationInterlockEXT);
+    }
     EmitMemoryOffsets(state);
     if (program.BlockOrder().empty()) {
+        if (OrderedPixelShader(state)) {
+            state.module.AddFunction(spv::OpEndInvocationInterlockEXT);
+        }
         if (state.pixelValidMaskVariable != 0u) {
             const auto maskValue = state.module.AllocateId();
             const auto active = state.module.AllocateId();

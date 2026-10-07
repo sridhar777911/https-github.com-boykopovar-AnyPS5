@@ -678,7 +678,7 @@ void verifyPixelRequestSerialization() {
                         value.hasPerspectiveCenterVgpr, value.perspectiveCentroid, value.posX, value.posY,
                         value.posZ, value.posW, value.frontFace, value.ancillary, value.sampleShading,
                         value.noPerspective, value.linearCentroid, value.pixelKillEnable, value.depthExportEnable,
-                        value.sampleMaskExportEnable, value.earlyZ, value.executeOnNoop, value.conservativeZExport,
+                        value.sampleMaskExportEnable, value.earlyZ, value.executeOnNoop, value.conservativeZExport, value.orderedPixelShader,
                         value.targetOutputMode, value.targetExportMapping);
     };
     const std::array<std::uint32_t, 1> code{0xbf810000u};
@@ -718,6 +718,7 @@ void verifyPixelRequestSerialization() {
         .earlyZ = true,
         .executeOnNoop = true,
         .conservativeZExport = ConservativeZExport::GreaterThanZ,
+        .orderedPixelShader = true,
         .targetOutputMode = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u}
     };
     for (std::uint32_t i = 0; i < pixel.interpolatorSettings.size(); ++i) pixel.interpolatorSettings[i] = 0x10101010u + i;
@@ -756,19 +757,19 @@ void verifyPixelRequestSerialization() {
     minimal.context.waveSize = 64;
     minimal.context.pixel = ShaderPixelStageInfo{};
     const auto encoded = serializer.Serialize(minimal);
-    require(requestPrefix(encoded, 8u) == "NVNQQQkAAAA=", "new requests did not use serialization version 9");
-    constexpr std::size_t mappingOffset = 8u + 37u + 18u + 162u;
+    require(requestPrefix(encoded, 8u) == "NVNQQQoAAAA=", "new requests did not use serialization version 10");
+    constexpr std::size_t mappingOffset = 8u + 37u + 18u + 163u;
     for (std::size_t bytes = 0; bytes < 8u; ++bytes) {
-        expectFailure([&] { static_cast<void>(serializer.Deserialize(requestPrefix(encoded, mappingOffset + bytes))); }, "truncated data", "a truncated version-8 pixel mapping was accepted");
+        expectFailure([&] { static_cast<void>(serializer.Deserialize(requestPrefix(encoded, mappingOffset + bytes))); }, "truncated data", "a truncated version-10 pixel mapping was accepted");
     }
-    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQQoAAAA="}) {
+    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQQsAAAA="}) {
         expectFailure([&] { static_cast<void>(serializer.Deserialize(unsupported)); }, "serialization version", "an unsupported request version was accepted");
     }
 }
 
 void verifyLegacyPixelRequests() {
     using namespace ShaderRecompiler;
-    static constexpr std::array<std::string_view, 8> legacyPixelRequests{
+    static constexpr std::array<std::string_view, 9> legacyPixelRequests{
         "NVNQQQEAAAAFAAADAAAAAAABAAAAAAAAAAAAgb8AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAA"
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAkAAAAAAAAAAAAA"
@@ -809,6 +810,11 @@ void verifyLegacyPixelRequests() {
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAABAAAAAAAAAAAAAAAAAAAAAgkAAAAAAAAA"
         "AAAAAAAAAAAAAAAAAAAAAAAAEEAAAAMBAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         "AAsAAAAAAAAAgAAAAAAAAQ==",
+        "NVNQQQkAAAAFAAADAAAAAAABAAAAAAAAAAAAgb8AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAABAAAAAAAAAAAAAAAAAAAAAgkAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAEEAAAAMBAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAsAAAAAAAAAgAAAAAAAAQAAAAA=",
     };
     const RequestSerializer serializer;
     for (std::size_t index = 0; index < legacyPixelRequests.size(); ++index) {
@@ -820,6 +826,7 @@ void verifyLegacyPixelRequests() {
         require(pixel.targetExportMapping == std::array<std::uint8_t, 8>{}, "legacy pixel mapping no longer defaults to zero");
         require(pixel.inputAddr == 2u && pixel.hasPerspectiveCenterVgpr && pixel.targetOutputMode[0] == 9u, "legacy pixel layout was misread");
         require(pixel.conservativeZExport == (version >= 7u ? ConservativeZExport::GreaterThanZ : ConservativeZExport::AnyZ), "legacy conservative Z layout was misread");
+        require(!pixel.orderedPixelShader, "a legacy request became a primitive-ordered pixel shader");
         require(request.shader.stage == ShaderStage::Fragment && request.shader.code.size() == 1u && request.shader.code[0] == 0xbf810000u && !request.context.vertex.has_value() && request.context.memory.empty(), "legacy guest context was misaligned");
         require(request.target.vulkanVersion == 0x00401000u && request.target.spirvVersion == 0x00010300u && request.target.subgroupSize == 64u && request.layout.firstBinding == 11u && request.layout.pushConstantSizeBytes == 128u, "legacy target or binding layout was misaligned");
         require(request.useCache == (version == 1u) && request.target.nonConstantImageOffsets == (version >= 6u) && request.target.srgbDecodeFormats == 0u, "legacy request trailer was misread");

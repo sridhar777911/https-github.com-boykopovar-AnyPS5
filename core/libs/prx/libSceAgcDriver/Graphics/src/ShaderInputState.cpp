@@ -154,6 +154,7 @@ ShaderRecompiler::ShaderPixelStageInfo DecodePixelStageInfo(const Registers& con
         .earlyZ = zOrder == 1u && !pixelKillEnable && !depthExportEnable && !sampleMaskExportEnable,
         .executeOnNoop = ((shaderControl >> 10u) & 0x1u) != 0,
         .conservativeZExport = static_cast<ShaderRecompiler::ConservativeZExport>(conservativeZExport),
+        .orderedPixelShader = ((shaderControl >> 16u) & 0x1u) != 0,
         .targetOutputMode = targetOutputMode,
         .targetExportMapping = exportMappings
     };

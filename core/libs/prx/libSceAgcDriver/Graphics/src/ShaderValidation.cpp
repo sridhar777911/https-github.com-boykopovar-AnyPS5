@@ -207,6 +207,10 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
                     mesh &&
                     capability == spv::CapabilityMeshShadingEXT;
 
+                const bool isInterlockCapability =
+                    fragment &&
+                    capability == spv::CapabilityFragmentShaderPixelInterlockEXT;
+
                 // Enabled unconditionally or by the device setup in VulkanDevice.
                 const bool isFeatureCapability =
                     capability == spv::CapabilitySampled1D ||
@@ -241,6 +245,7 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
                     isBdaCapability ||
                     isTessellationCapability ||
                     isMeshCapability ||
+                    isInterlockCapability ||
                     isFeatureCapability ||
                     isDescriptorIndexingCapability ||
                     (imageInt64Atomics && (capability == spv::CapabilityInt64Atomics || capability == spv::CapabilityInt64ImageEXT)),
@@ -256,6 +261,10 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
                 const auto end = std::find(text, text + bytes.size(), '\0');
                 Require(end != text + bytes.size(), "unterminated SPIR-V extension");
                 const std::string_view extension(text, static_cast<std::size_t>(end - text));
+                if (extension == "SPV_EXT_fragment_shader_interlock") {
+                    Require(fragment, "SPV_EXT_fragment_shader_interlock requires a fragment shader");
+                    break;
+                }
                 if (extension == "SPV_KHR_fragment_shader_barycentric") {
                     Require(fragment && fragmentShaderBarycentric, "SPV_KHR_fragment_shader_barycentric requires enabled fragmentShaderBarycentric in a fragment shader");
                     break;
@@ -376,7 +385,7 @@ Module Inspect(const CompiledShader& compiled, const State& state, const VkPhysi
         mode(spv::ExecutionModeVertexOrderCw, {});
         Require(module.modes.size() == 3, "unsupported tessellation-evaluation execution mode");
     } else if (fragment) {
-        for (const auto& [name, operands] : module.modes) Require(operands.empty() && (name == spv::ExecutionModeOriginUpperLeft || name == spv::ExecutionModeEarlyFragmentTests || name == spv::ExecutionModeDepthReplacing || name == spv::ExecutionModeDepthLess || name == spv::ExecutionModeDepthGreater), "unsupported fragment execution mode");
+        for (const auto& [name, operands] : module.modes) Require(operands.empty() && (name == spv::ExecutionModeOriginUpperLeft || name == spv::ExecutionModeEarlyFragmentTests || name == spv::ExecutionModeDepthReplacing || name == spv::ExecutionModeDepthLess || name == spv::ExecutionModeDepthGreater || name == spv::ExecutionModePixelInterlockOrderedEXT), "unsupported fragment execution mode");
     } else Require(module.modes.empty(), "unsupported vertex execution mode");
     std::set<std::pair<std::uint32_t, std::uint32_t>> descriptors;
     bool push = false;

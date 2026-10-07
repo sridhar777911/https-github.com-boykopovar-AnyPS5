@@ -88,6 +88,9 @@ void EmitReturnTerminator(SpirvValueEmitContext& ctx) {
             RecordBdaFault(state, BdaConstant(state, state.program.Resources().shaderHash), ConstantU32(state, state.loopGuardLimit), EmitBinaryU32(state, spv::OpISub, pc, ConstantU32(state, 1u)), BdaAbi::FaultReason::LoopLimit);
         });
     }
+    if (OrderedPixelShader(state)) {
+        state.module.AddFunction(spv::OpEndInvocationInterlockEXT);
+    }
     EmitKillIfPixelValidMaskInactive(state);
     state.module.AddFunction(spv::OpReturn);
 }
