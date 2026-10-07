@@ -3,8 +3,9 @@ import json
 import os
 import re
 import subprocess
-from itertools import combinations
+from itertools import chain, combinations
 from pathlib import Path
+from urllib.parse import urlencode
 
 PARENT = 'if .parent then "\\(.parent.owner.login)/\\(.parent.name)" else .nameWithOwner end'
 EXPORT = re.compile(r"^\+.*\bAPS5_VABI\s+(\w+)\s*\(")
@@ -26,14 +27,15 @@ def upstream():
 
 
 def open_prs(base):
-    out = gh("pr", "list", "-R", REPO, "--base", base, "-L", "200", "--json", "number,author,headRefOid,body")
+    query = urlencode({"state": "open", "base": base, "per_page": 100})
+    out = gh("api", "--paginate", "--slurp", f"repos/{REPO}/pulls?{query}")
     prs = {}
-    for pr in json.loads(out):
+    for pr in chain.from_iterable(json.loads(out)):
         depends = DEPENDS.search(pr["body"] or "")
         prs[pr["number"]] = {
             "ref": f"refs/pr/{pr['number']}",
-            "sha": pr["headRefOid"],
-            "author": pr["author"]["login"],
+            "sha": pr["head"]["sha"],
+            "author": pr["user"]["login"],
             "depends": {int(n) for n in re.findall(r"#(\d+)", depends.group(1))} if depends else set(),
         }
     return prs
