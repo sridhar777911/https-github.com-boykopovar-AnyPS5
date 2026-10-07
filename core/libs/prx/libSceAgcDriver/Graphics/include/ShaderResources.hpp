@@ -55,7 +55,7 @@ public:
 
     // The layout for `key` (binding, type, count, stage flags per binding, as ShaderResources builds
     // it from `bindings`), created on first use.
-    VkDescriptorSetLayout Layout(std::span<const std::uint32_t> key, std::span<const VkDescriptorSetLayoutBinding> bindings);
+    VkDescriptorSetLayout Layout(std::span<const std::uint32_t> key, std::span<const VkDescriptorSetLayoutBinding> bindings, std::span<const VkDescriptorBindingFlags> flags = {});
     struct SetAllocation {
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkDescriptorPool pool = VK_NULL_HANDLE;
@@ -265,7 +265,29 @@ private:
         VkDescriptorSetLayoutBinding layout;
         std::vector<std::size_t> allocations;
         std::vector<std::size_t> imageAllocations;
+        std::vector<std::uint32_t> arrayElements;
+        VkDescriptorBindingFlags flags = 0;
     };
+
+    struct TableProgram {
+        ShaderRecompiler::ShaderStage stage = ShaderRecompiler::ShaderStage::Compute;
+        std::uint64_t shader = 0;
+        const ShaderRecompiler::DescriptorBinding* images = nullptr;
+        std::size_t imageBinding = 0;
+        std::int64_t mapAllocation = -1;
+        std::vector<std::uint32_t> map;
+        std::vector<ShaderRecompiler::ImageTableEntryPoison> poison;
+        std::vector<std::string> messages;
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
+        std::vector<std::uint32_t> imagePoison;
+        std::vector<std::uint32_t> samplerPoison;
+    };
+    std::vector<TableProgram> tablePrograms;
+    TableProgram& tableProgram(const CompiledShader& shader);
+    void addSamplerTable(const ShaderRecompiler::DescriptorBinding& binding, VkShaderStageFlags flags, TableProgram& table);
+    void resolveImageTable(TableProgram& table);
+    void finishImageTable(TableProgram& table);
+    void checkTableAliasing() const;
 
     // A host-imported buffer region the set reads in place, with its import's identity at build time.
     struct DirectRegion {
@@ -444,6 +466,7 @@ private:
     std::uint64_t storageBuffers = 0;
     std::uint32_t plannedSampledImages = 0;
     std::uint32_t plannedStorageImages = 0;
+    std::uint32_t plannedTableImages = 0;
     // The compute constructor's shader and captured regions: the caller's objects, valid only until
     // the build (Complete() for a deferred one) is done, and reset then (forgetDeferredInputs).
     CompiledShader deferredCompute{};

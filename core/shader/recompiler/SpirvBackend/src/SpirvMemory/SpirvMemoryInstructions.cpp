@@ -1422,6 +1422,22 @@ std::uint32_t EmitReadConst(SpirvValueEmitContext& ctx, const IrValue& inst) {
     return value;
 }
 
+SpirvScalarBufferDword EmitScalarBufferDword(SpirvEmitterState& state, std::uint32_t offset, std::uint32_t immediate, std::uint32_t sizeLow, std::uint32_t sizeHigh) {
+    const auto u32 = TypeU32(state);
+    const auto boolean = TypeBool(state);
+    const auto sum = state.module.AllocateId();
+    state.module.AddFunction(spv::OpIAddCarry, TypeU32Pair(state), sum, offset, immediate);
+    const auto address = state.module.AllocateId();
+    const auto carry = state.module.AllocateId();
+    state.module.AddFunction(spv::OpCompositeExtract, u32, address, sum, 0u);
+    state.module.AddFunction(spv::OpCompositeExtract, u32, carry, sum, 1u);
+    SpirvScalarBufferDword dword;
+    dword.byte = Binary(state, spv::OpBitwiseAnd, u32, address, ConstantU32(state, ~3u));
+    const auto below = Binary(state, spv::OpLogicalOr, boolean, Binary(state, spv::OpINotEqual, boolean, sizeHigh, ConstantU32(state, 0u)), Binary(state, spv::OpULessThan, boolean, dword.byte, sizeLow));
+    dword.inRange = Binary(state, spv::OpLogicalAnd, boolean, Binary(state, spv::OpIEqual, boolean, carry, ConstantU32(state, 0u)), below);
+    return dword;
+}
+
 void EmitReadConstBuffer(SpirvValueEmitContext& ctx, const IrValue& inst) {
     const auto& mem = ctx.Memory(inst);
     if (mem.planningOnly) {
@@ -1431,8 +1447,6 @@ void EmitReadConstBuffer(SpirvValueEmitContext& ctx, const IrValue& inst) {
         ctx.Fail(inst, "must read a scalar buffer resource");
     }
     auto& state = ctx.state;
-    const auto address = Binary(state, spv::OpIAdd, TypeU32(state), ctx.Arg(inst, 1), ConstantU32(state, mem.offset));
-    const auto noCarry = Binary(state, spv::OpUGreaterThanEqual, TypeBool(state), address, ctx.Arg(inst, 1));
     if (mem.gpuDescriptor) {
         const IrValue* handle = inst.Argument(0)->Resolve();
         if (handle->Opcode() != IrOpcode::GetBufferResource || handle->ArgumentCount() != 4u) {
@@ -1442,14 +1456,21 @@ void EmitReadConstBuffer(SpirvValueEmitContext& ctx, const IrValue& inst) {
         const auto word1 = ctx.Arg(*handle, 1);
         const auto records = ctx.Arg(*handle, 2);
         const auto stride = EmitBitFieldUExtract(state, word1, ConstantU32(state, 16u), ConstantU32(state, 14u));
-        const auto size = Select(state, u32, Binary(state, spv::OpIEqual, TypeBool(state), stride, ConstantU32(state, 0u)), records, Binary(state, spv::OpIMul, u32, stride, records));
-        const auto byte = Binary(state, spv::OpBitwiseAnd, u32, address, ConstantU32(state, ~3u));
-        const auto inBounds = AndCondition(state, noCarry, Binary(state, spv::OpULessThan, TypeBool(state), byte, size));
+        const auto product = state.module.AllocateId();
+        state.module.AddFunction(spv::OpUMulExtended, TypeU32Pair(state), product, stride, records);
+        const auto productLow = state.module.AllocateId();
+        const auto productHigh = state.module.AllocateId();
+        state.module.AddFunction(spv::OpCompositeExtract, u32, productLow, product, 0u);
+        state.module.AddFunction(spv::OpCompositeExtract, u32, productHigh, product, 1u);
+        const auto strided = Binary(state, spv::OpINotEqual, TypeBool(state), stride, ConstantU32(state, 0u));
+        const auto dword = EmitScalarBufferDword(state, ctx.Arg(inst, 1), ConstantU32(state, mem.offset), Select(state, u32, strided, productLow, records), Select(state, u32, strided, productHigh, ConstantU32(state, 0u)));
         const auto base = DeviceAddressFromWords(state, ctx.Arg(*handle, 0), EmitBitFieldUExtract(state, word1, ConstantU32(state, 0u), ConstantU32(state, 16u)));
-        const auto guest = Binary(state, spv::OpIAdd, TypeScalarU64(state), base, Unary(state, spv::OpUConvert, TypeScalarU64(state), byte));
-        ctx.Define(inst, EmitValueOrZeroIfCondition(state, inBounds, [&] { return EmitBdaRead(ctx, inst, guest, 32u); }));
+        const auto guest = Binary(state, spv::OpIAdd, TypeScalarU64(state), base, Unary(state, spv::OpUConvert, TypeScalarU64(state), dword.byte));
+        ctx.Define(inst, EmitValueOrZeroIfCondition(state, dword.inRange, [&] { return EmitBdaRead(ctx, inst, guest, 32u); }));
         return;
     }
+    const auto address = Binary(state, spv::OpIAdd, TypeU32(state), ctx.Arg(inst, 1), ConstantU32(state, mem.offset));
+    const auto noCarry = Binary(state, spv::OpUGreaterThanEqual, TypeBool(state), address, ctx.Arg(inst, 1));
     const auto rawIndex = Binary(state, spv::OpShiftRightLogical, TypeU32(state), address, ConstantU32(state, 2u));
     const auto access = PrepareMemoryResourceAccess(state, mem);
     const auto element = EmitMemoryElementIndex(state, access, rawIndex);

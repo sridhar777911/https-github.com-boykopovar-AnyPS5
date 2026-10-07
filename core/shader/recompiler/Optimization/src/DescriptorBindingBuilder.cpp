@@ -1,5 +1,6 @@
 #include "Optimization/DescriptorBindingBuilder.hpp"
 #include "SpirvBackend/SpirvEmitterHelpers.hpp"
+#include "ImageTableAbi.hpp"
 #include <spirv/unified1/spirv.hpp>
 #include <algorithm>
 #include <atomic>
@@ -32,8 +33,11 @@ struct BufferWrittenCounts {
 BufferWrittenCounts bufferWrittenCounts;
 
 DescriptorKind PhysicalKindFor(DescriptorBindingKind kind) {
-    if (kind == DescriptorBindingKind::Samplers) {
+    if (kind == DescriptorBindingKind::Samplers || kind == DescriptorBindingKind::SamplerTable) {
         return DescriptorKind::Sampler;
+    }
+    if (kind == DescriptorBindingKind::ImageTable) {
+        return DescriptorKind::SampledImage;
     }
     const ImageResourceClass imageClass = ImageBindingResourceClass(kind);
     if (imageClass == ImageResourceClass::Sampled) {
@@ -66,6 +70,15 @@ DescriptorRole RoleFor(DescriptorBindingKind kind) {
     }
     if (kind == DescriptorBindingKind::ShaderData) {
         return DescriptorRole::ShaderData;
+    }
+    if (kind == DescriptorBindingKind::ImageTable) {
+        return DescriptorRole::ImageTable;
+    }
+    if (kind == DescriptorBindingKind::SamplerTable) {
+        return DescriptorRole::SamplerTable;
+    }
+    if (kind == DescriptorBindingKind::ImageTableMap) {
+        return DescriptorRole::ImageTableMap;
     }
     if (ImageBindingResourceClass(kind) != ImageResourceClass::None) {
         return DescriptorRole::GuestImages;
@@ -152,11 +165,19 @@ std::vector<std::uint32_t> GuestImagesDescriptor(const std::vector<std::uint32_t
     return result;
 }
 
-std::vector<std::uint32_t> GuestSamplersDescriptor(const std::vector<std::uint32_t>& resources, const ResourceSnapshot& snapshot) {
+std::vector<std::uint32_t> GuestSamplersDescriptor(const std::vector<std::uint32_t>& resources, const std::vector<SamplerResource>& samplers, const ResourceSnapshot& snapshot) {
     std::vector<std::uint32_t> result;
     std::uint32_t dwordCount = 0;
     for (std::size_t i = 0; i < resources.size(); i++) {
-        const std::uint32_t r = resources[i];
+        std::uint32_t r = resources[i];
+        if (r >= snapshot.samplers.size() && r < samplers.size()) {
+            for (std::uint32_t original = 0; original < snapshot.samplers.size() && original < samplers.size(); original++) {
+                if (samplers[original].source == samplers[r].source && samplers[original].tableView == NoTableView) {
+                    r = original;
+                    break;
+                }
+            }
+        }
         if (r >= snapshot.samplers.size()) {
             fail("DescriptorBindingBuilder::Populate guest sampler index is out of range");
         }
@@ -202,7 +223,7 @@ struct UnnormalizedProof {
 UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapshot& snapshot) {
     UnnormalizedProof proof{std::vector<bool>(info.samplers.size()), std::vector<bool>(info.images.size())};
     for (std::uint32_t r = 0; r < info.samplers.size(); r++) {
-        if ((GuestSamplersDescriptor({r}, snapshot)[0] & ForceUnnormalizedBit) == 0u) {
+        if ((GuestSamplersDescriptor({r}, info.samplers, snapshot)[0] & ForceUnnormalizedBit) == 0u) {
             continue;
         }
         const auto& sampler = info.samplers[r];
@@ -218,7 +239,7 @@ UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapsh
                 continue;
             }
             const auto& image = info.images.at(pair.image);
-            if (image.indirectRoot != ImageResource::NoIndirectImage) {
+            if (image.tableView != NoTableView) {
                 failUnnormalized("samples an image selected at run time");
             }
             if ((image.dimension != RdnaImageDimension::Dim1D && image.dimension != RdnaImageDimension::Dim2D) || image.cube) {
@@ -251,10 +272,9 @@ std::vector<std::uint32_t> SamplerElements(const IrBindingLayout& layout, const 
 }
 
 std::uint32_t ImageSamplerMask(const ShaderInfo& info, const std::vector<std::uint32_t>& samplerElements, std::uint32_t resource) {
-    const std::uint32_t root = info.images.at(resource).indirectRoot;
     std::uint32_t mask = 0;
     for (const SampledResourcePair& pair : info.sampledPairs) {
-        if (pair.image != resource && pair.image != root) {
+        if (pair.image != resource || info.samplers.at(pair.sampler).tableView != NoTableView) {
             continue;
         }
         if (pair.sampler >= samplerElements.size() || samplerElements[pair.sampler] >= ShaderInfo::MaxSamplers) {
@@ -263,6 +283,36 @@ std::uint32_t ImageSamplerMask(const ShaderInfo& info, const std::vector<std::ui
         mask |= 1u << samplerElements[pair.sampler];
     }
     return mask;
+}
+
+bool ReducesBetweenTexels(std::uint32_t word0, std::uint32_t filter) {
+    return ((word0 >> 29u) & 3u) != 0u && (((filter >> 20u) & 0xfu) != 0u || ((filter >> 26u) & 3u) == 2u);
+}
+
+bool SamplesTableImage(const ShaderInfo& info, std::uint32_t sampler) {
+    return std::any_of(info.sampledPairs.begin(), info.sampledPairs.end(), [&](const SampledResourcePair& pair) { return pair.sampler == sampler && info.images.at(pair.image).tableView != NoTableView; });
+}
+
+std::uint32_t TableBucket(std::size_t elements, std::uint32_t budget) {
+    std::uint32_t bucket = 16u;
+    while (bucket < elements && bucket < budget) {
+        bucket <<= 1u;
+    }
+    if (elements > bucket) {
+        fail("DescriptorBindingBuilder::Populate image table holds more elements than its budget");
+    }
+    return bucket;
+}
+
+DescriptorImageShape TableImageShape(RdnaImageDimension dimension) {
+    switch (dimension) {
+        case RdnaImageDimension::Dim1D: return DescriptorImageShape::Image1D;
+        case RdnaImageDimension::Dim2D: return DescriptorImageShape::Image2D;
+        case RdnaImageDimension::Dim2DArray: return DescriptorImageShape::Image2DArray;
+        case RdnaImageDimension::Dim3D: return DescriptorImageShape::Image3D;
+        default: break;
+    }
+    fail("DescriptorBindingBuilder::Populate image table entry has no descriptor image shape");
 }
 
 std::vector<std::uint32_t> ShaderDataDwordsFor(const IrBindingLayout& layout, std::uint32_t userDataBase, const ResourceSnapshot& snapshot, const std::array<std::uint32_t, 3>& partialThreads) {
@@ -286,9 +336,8 @@ std::vector<std::uint32_t> ShaderDataDwordsFor(const IrBindingLayout& layout, st
 }
 
 std::uint32_t PointFilteredSamplerWord(std::uint32_t word0, std::uint32_t filter) {
-    const bool reduced = ((word0 >> 29u) & 3u) != 0u;
-    if (reduced && (((filter >> 20u) & 0xfu) != 0u || ((filter >> 26u) & 3u) == 2u)) {
-        fail("DescriptorBindingBuilder: a min or max reduction sampler that filters between texels or mip levels samples an image that needs point filtering (sint, converted or depth-bits format), which is not implemented");
+    if (ReducesBetweenTexels(word0, filter)) {
+        fail("DescriptorBindingBuilder: a min or max reduction sampler that filters between texels or mip levels samples an image that needs point filtering (integer, converted or depth-bits format), which is not implemented");
     }
     const bool mipmapped = ((filter >> 26u) & 3u) != 0u;
     return (filter & ~(0xffu << 20u)) | (1u << 24u) | (mipmapped ? 1u << 26u : 0u);
@@ -345,16 +394,54 @@ void DescriptorBindingBuilder::Populate(BindingAllocationResult& allocation, con
             }
             break;
         case DescriptorRole::GuestSamplers:
-            physical.guestDescriptor = GuestSamplersDescriptor(logical.resources, snapshot);
+            physical.guestDescriptor = GuestSamplersDescriptor(logical.resources, info.samplers, snapshot);
             for (std::size_t element = 0; element < logical.resources.size(); ++element) {
                 const auto& sampler = info.samplers.at(logical.resources[element]);
                 physical.samplerDepthCompare.push_back(sampler.depthCompare);
                 physical.samplerUnnormalized.push_back(unnormalized.samplers.at(logical.resources[element]));
+                if (ReducesBetweenTexels(physical.guestDescriptor.at(element * 4u), physical.guestDescriptor.at(element * 4u + 2u)) && SamplesTableImage(info, logical.resources[element])) {
+                    fail("DescriptorBindingBuilder::Populate a min or max reduction sampler that filters between texels or mip levels samples an image selected at run time, which is not implemented");
+                }
                 if (sampler.forcePointFiltering) {
                     auto& filter = physical.guestDescriptor.at(element * 4u + 2u);
                     filter = PointFilteredSamplerWord(physical.guestDescriptor.at(element * 4u), filter);
                 }
             }
+            break;
+        case DescriptorRole::ImageTable:
+            for (const auto& entry : snapshot.tables.images) {
+                if (entry.words.dwordCount != 8u) {
+                    fail("DescriptorBindingBuilder::Populate image table entry has an invalid width");
+                }
+                physical.guestDescriptor.insert(physical.guestDescriptor.end(), entry.words.dwords.begin(), entry.words.dwords.end());
+                physical.imageShapes.push_back(TableImageShape(entry.dimension));
+                physical.imageDepthCompare.push_back(entry.depthCompare);
+                physical.imageWritten.push_back(false);
+                physical.imageAtomic.push_back(false);
+            }
+            physical.count = TableBucket(snapshot.tables.images.size(), ImageTableAbi::ImageBudget);
+            break;
+        case DescriptorRole::SamplerTable:
+            for (const auto& entry : snapshot.tables.samplers) {
+                if (entry.words.dwordCount != 4u) {
+                    fail("DescriptorBindingBuilder::Populate sampler table entry has an invalid width");
+                }
+                for (std::uint32_t copy = 0; copy < 2u; copy++) {
+                    const auto first = physical.guestDescriptor.size();
+                    physical.guestDescriptor.insert(physical.guestDescriptor.end(), entry.words.dwords.begin(), entry.words.dwords.begin() + 4);
+                    if (copy == 1u && entry.point) {
+                        physical.guestDescriptor[first + 2u] = PointFilteredSamplerWord(physical.guestDescriptor[first], physical.guestDescriptor[first + 2u]);
+                    }
+                    physical.samplerDepthCompare.push_back(entry.compare);
+                }
+            }
+            physical.count = TableBucket(snapshot.tables.samplers.size() * 2u, ImageTableAbi::SamplerBudget * 2u);
+            break;
+        case DescriptorRole::ImageTableMap:
+            if (snapshot.tables.map.empty()) {
+                fail("DescriptorBindingBuilder::Populate image table map is empty");
+            }
+            physical.guestDescriptor = snapshot.tables.map;
             break;
         case DescriptorRole::FlattenedSrt:
             if (snapshot.flattenedSrt.empty()) {

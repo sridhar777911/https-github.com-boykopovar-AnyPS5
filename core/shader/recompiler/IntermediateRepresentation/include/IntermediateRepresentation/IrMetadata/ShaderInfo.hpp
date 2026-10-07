@@ -9,6 +9,17 @@
 
 namespace ShaderRecompiler {
 
+struct TableView {
+    std::uint32_t source = 0;
+    bool sampler = false;
+    RdnaImageDimension dimension = RdnaImageDimension::Unknown;
+    bool depthCompare = false;
+    bool r128 = false;
+    std::uint8_t classes = 0;
+
+    bool operator==(const TableView& other) const = default;
+};
+
 struct ShaderInfo {
     std::uint32_t scratchDwords = 0;
     std::uint32_t sharedMemoryBytes = 0;
@@ -20,6 +31,7 @@ struct ShaderInfo {
     std::vector<ImageResource> images;
     std::vector<SamplerResource> samplers;
     std::vector<SampledResourcePair> sampledPairs;
+    std::vector<TableView> tableViews;
     std::vector<StageInput> inputs;
     std::vector<StageOutput> outputs;
     std::array<std::uint8_t, 32> vertexFetchComponents {};
@@ -32,6 +44,7 @@ struct ShaderInfo {
     bool hasBitwiseXor = false;
     bool usesDma = false;
     bool bdaWrites = false;
+    bool usesFaultBuffer = false;
     bool dispatchThreadLimit = false;
 
     bool operator==(const ShaderInfo& other) const = default;
