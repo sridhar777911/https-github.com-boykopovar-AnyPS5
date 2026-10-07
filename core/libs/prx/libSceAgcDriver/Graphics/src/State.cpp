@@ -526,9 +526,11 @@ State DecodeState(const QueueState& queue) {
         if (!written(slot)) continue;
         // Export formats only matter for the targets the draw writes.
         const auto slotExport = (exportFormat >> (4u * index)) & 0xfu;
-        if (slotExport == 0 || slotExport == 7 || slotExport == 8 || slotExport > 9) throw std::runtime_error("AGC graphics: color export format " + std::to_string(slotExport) + " is unsupported");
+        if (slotExport == 0 || slotExport == 8 || slotExport > 9) throw std::runtime_error("AGC graphics: color export format " + std::to_string(slotExport) + " is unsupported");
         auto color = DecodeColorBuffer(cx, slot);
+        if (slotExport == 7 && ((read(cx, 0x31c + slot * 0xfu) >> 8u) & 7u) != 4u) throw std::runtime_error("AGC graphics: color export format 7 (UINT16_ABGR) into a target that is not unsigned integer is unsupported");
         color.exportIndex = index;
+        color.uintExport = slotExport == 7;
         APS5_LOG_OUT_DEBUG("Color %u address=0x%llx extent=%ux%u bytes=%llu VkFormat=%u", slot, static_cast<unsigned long long>(color.address), color.extent.width, color.extent.height, static_cast<unsigned long long>(color.bytes), static_cast<unsigned>(color.format));
         if (result.colors.empty()) {
             result.renderExtent = color.extent;
@@ -585,6 +587,7 @@ State DecodeState(const QueueState& queue) {
             if (((exportedMask >> ((mapping >> (2u * component)) & 3u)) & 1u) != 0) state.colorWriteMask |= 1u << component;
         }
         state.blendEnable = (blend >> 30u) & 1u;
+        Require(!state.blendEnable || !color.uintExport, "blending into an unsigned integer target is unsupported");
         if (state.blendEnable) {
             Require((read(cx, 0x31c + slot * 0xfu) & 0x10000u) == 0, "blend bypass conflicts with enabled blending");
             state.srcColorBlendFactor = blendFactor(blend & 0x1fu);
