@@ -528,7 +528,9 @@ std::set<std::uint32_t> ValidateShaders(std::span<const CompiledShader> shaders,
     std::set<std::uint32_t> locations;
     for (const auto& [location, signature] : previous.outputs) {
         if (location >= attachments) continue;
-        Require(signature == "vertex:f32x4", "fragment shader must export float4 colors to its attachments");
+        const auto color = std::find_if(state.colors.begin(), state.colors.end(), [&](const ColorTarget& target) { return target.exportIndex == location; });
+        const bool uintExport = color != state.colors.end() && color->uintExport;
+        Require(signature == (uintExport ? "vertex:u32x4" : "vertex:f32x4"), uintExport ? "fragment shader must export uint4 colors to its unsigned integer attachments" : "fragment shader must export float4 colors to its attachments");
         locations.insert(location);
     }
     return locations;
