@@ -6,12 +6,14 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <unistd.h>
 #include <cerrno>
 #endif
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include "prx/libkernel/Socket/include/SocketRuntime.hpp"
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cstdint>
 #include <cstring>
@@ -22,6 +24,8 @@
 #include <cstdarg>
 #include <cstddef>
 #include <stdexcept>
+#include <string>
+#include <thread>
 #include <vector>
 
 extern "C" int* APS5_VABI __error_nid_postfix();
@@ -164,6 +168,34 @@ int GuestSockets::Close(int descriptor) {
 bool GuestSockets::IsOpen(int descriptor) {
     std::lock_guard lock(socketsMutex);
     return sockets.contains(descriptor);
+}
+
+namespace {
+#ifdef _WIN32
+using NativePollDescriptor = WSAPOLLFD;
+#else
+using NativePollDescriptor = pollfd;
+#endif
+struct GuestPollDescriptor {
+    int descriptor;
+    short events;
+    short revents;
+};
+struct PollFlag {
+    short guest;
+    short native;
+};
+constexpr short GuestPollPriority = 0x2;
+constexpr short GuestPollInvalid = 0x20;
+constexpr short GuestPollAccepted = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40 | 0x80 | 0x100;
+constexpr PollFlag RequestFlags[] = {
+    {0x1, POLLIN}, {0x2, POLLPRI}, {0x4, POLLOUT}, {0x40, POLLRDNORM}, {0x80, POLLRDBAND}, {0x100, POLLWRBAND}};
+constexpr PollFlag StatusFlags[] = {{0x8, POLLERR}, {0x10, POLLHUP}, {GuestPollInvalid, POLLNVAL}};
+std::shared_ptr<Socket> Find(int descriptor) {
+    std::lock_guard lock(socketsMutex);
+    const auto found = sockets.find(descriptor);
+    return found != sockets.end() ? found->second : nullptr;
+}
 }
 
 extern "C" {
@@ -480,5 +512,61 @@ std::int64_t APS5_VABI recvmsg_nid_postfix(int descriptor, GuestMsghdr* message,
     }
     message->controlLength = 0;
     return received;
+}
+int APS5_VABI poll_nid_postfix(GuestPollDescriptor* descriptors, std::uint32_t count, int timeout) {
+    if (timeout < -1) return Fail(22);
+    if (count && !descriptors) return Fail(14);
+    std::vector<std::shared_ptr<Socket>> held;
+    std::vector<NativePollDescriptor> native;
+    std::vector<std::uint32_t> owners;
+    int ready = 0;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        auto& entry = descriptors[i];
+        entry.revents = 0;
+        if (entry.descriptor < 0) continue;
+        if ((entry.events & ~GuestPollAccepted) != 0)
+            throw std::runtime_error("poll: unsupported event flags " + std::to_string(entry.events));
+        if (entry.descriptor < GuestSockets::FirstDescriptor)
+            throw std::runtime_error("poll: descriptor " + std::to_string(entry.descriptor) + " is not a socket");
+        auto socket = Find(entry.descriptor);
+        if (!socket) {
+            entry.revents = GuestPollInvalid;
+            ++ready;
+            continue;
+        }
+#ifdef _WIN32
+        if (entry.events & GuestPollPriority) throw std::runtime_error("poll: POLLPRI is not supported by WSAPoll");
+#endif
+        NativePollDescriptor request{};
+        request.fd = socket->value;
+        for (const auto& flag : RequestFlags)
+            if (entry.events & flag.guest) request.events = static_cast<short>(request.events | flag.native);
+        native.push_back(request);
+        owners.push_back(i);
+        held.push_back(std::move(socket));
+    }
+    if (native.empty()) {
+        if (ready || timeout == 0) return ready;
+        if (timeout < 0) throw std::runtime_error("poll: an infinite wait without sockets never returns");
+        std::this_thread::sleep_for(std::chrono::milliseconds(timeout));
+        return 0;
+    }
+    const int wait = ready ? 0 : timeout;
+#ifdef _WIN32
+    const int result = WSAPoll(native.data(), static_cast<ULONG>(native.size()), wait);
+#else
+    const int result = ::poll(native.data(), static_cast<nfds_t>(native.size()), wait);
+#endif
+    if (result < 0) return Fail(NativeError());
+    for (std::size_t i = 0; i < native.size(); ++i) {
+        auto& entry = descriptors[owners[i]];
+        for (const auto& flag : RequestFlags)
+            if ((entry.events & flag.guest) && (native[i].revents & flag.native))
+                entry.revents = static_cast<short>(entry.revents | flag.guest);
+        for (const auto& flag : StatusFlags)
+            if (native[i].revents & flag.native) entry.revents = static_cast<short>(entry.revents | flag.guest);
+        if (entry.revents) ++ready;
+    }
+    return ready;
 }
 }
