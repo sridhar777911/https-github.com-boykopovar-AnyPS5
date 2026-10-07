@@ -17,6 +17,7 @@
 
 extern "C" {
 void* APS5_VABI dlopen_nid_postfix(const char* path, int flags);
+void* GuestLoadStartModule_nid_no_patch(const char* path, int flags, std::size_t args, const void* argp, int* result);
 void* APS5_VABI dlsym_nid_postfix(void* handle, const char* name);
 int APS5_VABI dlclose_nid_postfix(void* handle);
 }
@@ -85,13 +86,11 @@ int APS5_VABI sceKernelGetModuleInfoForUnwind(uint64_t addr, int flags, ModuleIn
 }
 
 KernelModule APS5_VABI sceKernelLoadStartModule(const char* module_file_name, size_t args, const void* argp, uint32_t flags, const KernelLoadModuleOpt* opt, int* res) {
- (void)args;
- (void)argp;
  (void)flags;
  (void)opt;
  if (res) *res = 0;
  if (!module_file_name) return static_cast<KernelModule>(SCE_KERNEL_ERROR_EFAULT);
- void* handle = dlopen_nid_postfix(module_file_name, kRtldNow);
+ void* handle = GuestLoadStartModule_nid_no_patch(module_file_name, kRtldNow, args, argp, res);
  if (!handle) return static_cast<KernelModule>(SCE_KERNEL_ERROR_ENOENT);
  return static_cast<KernelModule>(reinterpret_cast<intptr_t>(handle));
 }
