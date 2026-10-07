@@ -1099,6 +1099,24 @@ void ClearImageMirrors(VkDevice device) {
     }
 }
 
+void ClearHostImports(VkDevice device) {
+    auto& state = Imports();
+    std::lock_guard lock(state.mutex);
+    if (state.device != device) return;
+    for (const auto& [address, entry] : state.imports) {
+        state.destroyBuffer(state.device, entry.buffer, nullptr);
+        state.freeMemory(state.device, entry.memory, nullptr);
+#ifdef _WIN32
+        GuestArena::GuestArenaUnmapAlias_nid_postfix(entry.alias);
+#endif
+    }
+    state.imports.clear();
+    state.failed.clear();
+    state.device = VK_NULL_HANDLE;
+    state.refreshedGeneration = 0;
+    ++state.epoch;
+}
+
 #ifndef _WIN32
 namespace {
 

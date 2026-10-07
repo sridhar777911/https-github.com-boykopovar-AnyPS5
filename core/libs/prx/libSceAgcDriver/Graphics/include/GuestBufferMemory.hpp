@@ -152,6 +152,7 @@ struct MirrorStats {
 };
 MirrorStats MirrorCounters();
 void ClearImageMirrors(VkDevice device);
+void ClearHostImports(VkDevice device);
 
 struct AddressCopy {
     std::uint64_t begin;

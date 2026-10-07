@@ -524,6 +524,7 @@ struct VulkanDevice::State {
             resourceCache.Clear();
             Graphics::ClearCachedTextures(device);
             Graphics::ClearImageMirrors(device);
+            Graphics::ClearHostImports(device);
             patternBuffers.clear();
             descriptorCache.reset();
             emptyBuffer.reset();
