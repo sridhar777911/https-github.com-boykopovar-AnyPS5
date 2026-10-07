@@ -246,7 +246,11 @@ void* APS5_VABI calloc_nid_postfix(size_t count, size_t size) {
 }
 
 int APS5_VABI posix_memalign_nid_postfix(void** pointer, size_t alignment, size_t size) {
-    return ApplicationHeapPosixAlign_nid_no_patch(pointer, alignment, size);
+    if (!pointer || alignment < sizeof(void*) || (alignment & (alignment - 1)) != 0) return 22;
+    const int savedError = errno;
+    const int result = ApplicationHeapPosixAlign_nid_no_patch(pointer, alignment, size);
+    errno = savedError;
+    return result;
 }
 
 void* APS5_VABI bsearch_nid_postfix(const void* key, const void* base, size_t count,

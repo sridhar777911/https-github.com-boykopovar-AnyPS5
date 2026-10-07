@@ -55,4 +55,16 @@ const char* APS5_VABI sceAjmStrError(int error) {
  return nullptr;
 }
 
+APS5_EXPORT("Z4HDpe1ZEa4", sceAjmWVorbisUnknown00);
+int APS5_VABI sceAjmWVorbisUnknown00(void) {
+    NotImplemented_nid_no_patch("Z4HDpe1ZEa4");
+    return 0;
+}
+
+APS5_EXPORT("oXShHcqMcX0", sceAjmWVorbisUnknown01);
+int APS5_VABI sceAjmWVorbisUnknown01(void) {
+    NotImplemented_nid_no_patch("oXShHcqMcX0");
+    return 0;
+}
+
 }

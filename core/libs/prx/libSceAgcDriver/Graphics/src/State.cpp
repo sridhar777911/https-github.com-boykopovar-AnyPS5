@@ -72,6 +72,19 @@ constexpr std::uint32_t ScreenOffsetMask = ~0x01ff01ffu;
 // Bits 26/27 (ZCLIP_NEAR/FAR_DISABLE) become depth clamping; bit 19 selects the [0, 1] clip space.
 constexpr std::uint32_t ClipControlMask = ~(0x80000u | 0x01000000u | 0x0c000000u);
 
+bool zFormatSupported(std::uint32_t format) {
+    return format == 0u || format == 1u || format == 2u || format == 3u || format == 9u;
+}
+
+std::uint32_t shaderControlMask(std::uint32_t zFormat) {
+    constexpr std::uint32_t zExportEnable = 0x1u;
+    constexpr std::uint32_t maskExportEnable = 0x100u;
+    auto mask = ShaderControlMask;
+    if (zFormat != 0u && zFormatSupported(zFormat)) mask &= ~zExportEnable;
+    if (zFormat == 9u) mask &= ~maskExportEnable;
+    return mask;
+}
+
 // Debug aid: APS5_IGNORE_DEPTH_TEST=1 renders depth- and stencil-tested draws without a depth
 // target as if their tests always passed (wrong occlusion, but the draws run), so stages that
 // depth-test everything can exercise the draw paths before depth targets exist.
@@ -469,7 +482,7 @@ State DecodeState(const QueueState& queue) {
         Require((depthControl & 8u) == 0 || result.depth.has_value(), "depth bounds without a depth surface");
         Require((depthControl & 0xc0000000u) == 0, "depth-conditional color writes are unsupported");
     }
-    zero(cx, 0x203, ShaderControlMask, "depth export, shader coverage or ordered fragment execution");
+    zero(cx, 0x203, shaderControlMask(read(cx, 0x1c4)), "depth export, shader coverage or ordered fragment execution");
     zero(cx, 0x2dc, AlphaToCoverageMask, "alpha-to-coverage");
     zero(cx, 0x2f8, ~0u, "multisampling or coverage conversion");
     zero(cx, 0x292, ScanModeMask, "scan conversion mode");
@@ -515,7 +528,7 @@ State DecodeState(const QueueState& queue) {
 
     // CB_COLOR_CONTROL mode 0 disables color writes, which only matters when a target is written.
     if (const auto colorControl = read(cx, 0x202); !colorControlSupported(colorControl, result.hasColorTarget)) throw std::runtime_error(colorControlMessage(colorControl));
-    zero(cx, 0x1c4, ~0u, "depth or sample-mask export");
+    zero(cx, 0x1c4, zFormatSupported(read(cx, 0x1c4)) ? 0u : ~0u, "depth or sample-mask export");
     const auto exportFormat = result.hasColorTarget ? read(cx, 0x1c5) : 0u;
     APS5_LOG_OUT_DEBUG("Export format=%u", exportFormat);
     // SPI_SHADER_POS_FORMAT: POS0 must be a 4-component position; later vectors carry the misc/clip
@@ -758,7 +771,9 @@ std::string DrawRejection(const QueueState& queue, bool indexed) {
         if (auto reason = require((word & 8u) == 0 || surface, "depth bounds without a depth surface"); !reason.empty()) return reason;
         if (auto reason = require((word & 0xc0000000u) == 0, "depth-conditional color writes are unsupported"); !reason.empty()) return reason;
     }
-    if (auto reason = nonzero(cx, 0x203, ShaderControlMask, "depth export, shader coverage or ordered fragment execution"); !reason.empty()) return reason;
+    std::uint32_t zFormat = 0;
+    static_cast<void>(value(cx, 0x1c4, zFormat));
+    if (auto reason = nonzero(cx, 0x203, shaderControlMask(zFormat), "depth export, shader coverage or ordered fragment execution"); !reason.empty()) return reason;
     if (auto reason = nonzero(cx, 0x2dc, AlphaToCoverageMask, "alpha-to-coverage"); !reason.empty()) return reason;
     if (auto reason = nonzero(cx, 0x2f8, ~0u, "multisampling or coverage conversion"); !reason.empty()) return reason;
     if (auto reason = nonzero(cx, 0x292, ScanModeMask, "scan conversion mode"); !reason.empty()) return reason;
@@ -775,7 +790,7 @@ std::string DrawRejection(const QueueState& queue, bool indexed) {
     if (auto reason = nonzero(cx, 0x204, ClipControlMask, "unsupported PA_CL_CLIP_CNTL flags"); !reason.empty()) return reason;
     std::uint32_t targetMask = 0, shaderMask = 0;
     if (value(cx, 0x8e, targetMask) && value(cx, 0x8f, shaderMask) && value(cx, 0x202, word) && !colorControlSupported(word, (targetMask & shaderMask) != 0)) return colorControlMessage(word);
-    if (auto reason = nonzero(cx, 0x1c4, ~0u, "depth or sample-mask export"); !reason.empty()) return reason;
+    if (auto reason = nonzero(cx, 0x1c4, zFormatSupported(zFormat) ? 0u : ~0u, "depth or sample-mask export"); !reason.empty()) return reason;
     if (PixelProgramUnset(queue)) return NullPixelProgramRejection(queue);
     for (const auto offset : {0x1b3u, 0x1b4u, 0x1c5u}) {
         if (find(cx, offset) != cx.end()) continue;

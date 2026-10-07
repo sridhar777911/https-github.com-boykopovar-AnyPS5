@@ -424,6 +424,50 @@ void CollectOutputs(const IrProgram& program, ShaderStageInputInfo inputInfo, Sh
     }
 }
 
+std::uint8_t SamplerUseOf(IrOpcode opcode, std::uint32_t flags, IrShaderStage stage) {
+    if (opcode == IrOpcode::ImageGatherRaw) {
+        return SamplerUseGather;
+    }
+    if (opcode == IrOpcode::ImageQueryLod) {
+        return SamplerUseQueryLod;
+    }
+    std::uint32_t use = (flags & RdnaImageSampleFlagDerivative) != 0u ? SamplerUseGradient : ImageSampleExplicitLod(flags, stage) ? SamplerUseExplicitLod : SamplerUseImplicitLod;
+    if ((flags & RdnaImageSampleFlagOffset) != 0u) {
+        use |= SamplerUseOffset;
+    }
+    if ((flags & RdnaImageSampleFlagCompare) != 0u) {
+        use |= SamplerUseCompare;
+    }
+    if ((flags & RdnaImageSampleFlagAdjust) != 0u) {
+        use |= SamplerUseAdjust;
+    }
+    return static_cast<std::uint8_t>(use);
+}
+
+void CollectSamplerUses(const IrProgram& program, ShaderInfo& info) {
+    for (auto& sampler : info.samplers) {
+        sampler.uses = 0;
+    }
+    const auto& memoryInfo = program.Resources().memoryInfo;
+    for (const auto& block : program.Blocks()) {
+        for (const IrValue* inst : block->Instructions()) {
+            if (!ImageOpcodeInfoOf(inst->Opcode()).needsSampler) {
+                continue;
+            }
+            const auto index = inst->Flags<MemoryFlags>().index;
+            if (index >= memoryInfo.size()) {
+                return Fail("image instruction has no memory metadata");
+            }
+            const auto& memory = memoryInfo[index];
+            if (memory.sampler >= info.samplers.size()) {
+                return Fail("image instruction references an unknown sampler");
+            }
+            auto& sampler = info.samplers[memory.sampler];
+            sampler.uses = static_cast<std::uint8_t>(sampler.uses | SamplerUseOf(inst->Opcode(), memory.imageSampleFlags, program.Resources().stage));
+        }
+    }
+}
+
 }
 
 void ShaderInfoCollector::Collect(IrProgram& program, const ShaderStageInputInfo& inputInfo) const {
@@ -460,6 +504,7 @@ void ShaderInfoCollector::Collect(IrProgram& program, const ShaderStageInputInfo
     }
     CollectBuiltinInputs(program, next);
     CollectOutputs(program, inputInfo, next);
+    CollectSamplerUses(program, next);
     program.Info() = std::move(next);
     program.Metadata().shaderInfoComplete = true;
 }

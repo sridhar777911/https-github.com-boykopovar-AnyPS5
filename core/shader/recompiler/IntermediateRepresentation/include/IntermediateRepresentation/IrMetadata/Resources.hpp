@@ -2,6 +2,7 @@
 #define CORE_SHADER_RECOMPILIER_INTERMEDIATEREPRESENTATION_INCLUDE_INTERMEDIATEREPRESENTATION_IRMETADATA_RESOURCES_HPP
 
 #include "IntermediateRepresentation/IrMetadata/BufferFormat.hpp"
+#include "IntermediateRepresentation/IrMetadata/ShaderStage.hpp"
 #include "IntermediateRepresentation/IrOpcode.hpp"
 #include "RdnaDecoder/RdnaInstruction.hpp"
 #include <cstdint>
@@ -68,9 +69,11 @@ struct ImageResource {
     bool read = false;
     bool written = false;
     bool atomic = false;
+    bool atomic64 = false;
     bool depthCompare = false;
     bool cube = false;
     bool r128 = false;
+    bool srgbDecode = false;
     bool depthBits = false;
     bool depthUnorm16 = false;
     bool packed = false;
@@ -84,11 +87,27 @@ struct ImageResource {
     bool operator==(const ImageResource& other) const = default;
 };
 
+enum SamplerUse : std::uint8_t {
+    SamplerUseExplicitLod = 1u << 0u,
+    SamplerUseImplicitLod = 1u << 1u,
+    SamplerUseGradient = 1u << 2u,
+    SamplerUseOffset = 1u << 3u,
+    SamplerUseCompare = 1u << 4u,
+    SamplerUseGather = 1u << 5u,
+    SamplerUseQueryLod = 1u << 6u,
+    SamplerUseAdjust = 1u << 7u,
+};
+
+inline bool ImageSampleExplicitLod(std::uint32_t flags, IrShaderStage stage) {
+    return (flags & (RdnaImageSampleFlagDerivative | RdnaImageSampleFlagLod | RdnaImageSampleFlagLevelZero)) != 0u || stage != IrShaderStage::Pixel;
+}
+
 struct SamplerResource {
     std::uint32_t source = 0;
     std::uint32_t firstUsePc = 0;
     bool forcePointFiltering = false;
     bool depthCompare = false;
+    std::uint8_t uses = 0;
 
     bool operator==(const SamplerResource& other) const = default;
 };

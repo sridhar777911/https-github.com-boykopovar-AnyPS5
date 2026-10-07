@@ -226,7 +226,8 @@ int ApplicationHeapPosixAlign_nid_no_patch(void** pointer, std::size_t alignment
     const auto align = callback<PosixAlign>(6);
     CallbackScope scope;
     void* result = nullptr;
-    if (align(&result, alignment, bytes) != 0) throw std::runtime_error("application heap: posix_memalign failed");
+    const int error = align(&result, alignment, bytes);
+    if (error != 0) return error;
     requireAllocation(result);
     if (reinterpret_cast<std::uintptr_t>(result) % alignment != 0) throw std::runtime_error("application heap: allocator returned a misaligned pointer");
     *pointer = result;

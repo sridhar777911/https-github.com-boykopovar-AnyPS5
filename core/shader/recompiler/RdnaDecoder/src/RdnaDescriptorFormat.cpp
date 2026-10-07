@@ -13,10 +13,11 @@ struct FormatInfo {
     bool sint32;
 };
 
-constexpr std::array<FormatInfo, 77> kFormatInfoTable {{
+constexpr std::array<FormatInfo, 79> kFormatInfoTable {{
     {IrBufferFormat::Format8UNorm, true, false, false},
     {IrBufferFormat::Format8SNorm, false, false, false},
     {IrBufferFormat::Format8UInt, true, true, false},
+    {IrBufferFormat::Format8SInt, true, false, true},
     {IrBufferFormat::Format16UNorm, true, false, false},
     {IrBufferFormat::Format16SNorm, true, false, false},
     {IrBufferFormat::Format16UInt, true, true, false},
@@ -34,6 +35,7 @@ constexpr std::array<FormatInfo, 77> kFormatInfoTable {{
     {IrBufferFormat::Format16_16UInt, true, true, false},
     {IrBufferFormat::Format16_16SInt, true, false, true},
     {IrBufferFormat::Format16_16Float, true, false, false},
+    {IrBufferFormat::Format11_11_10UNorm, true, true, false},
     {IrBufferFormat::Format11_11_10UInt, true, true, false},
     {IrBufferFormat::Format11_11_10Float, true, false, false},
     {IrBufferFormat::Format10_10_10_2UNorm, true, false, false},
@@ -118,7 +120,7 @@ IrTextureNumericClass SampledTextureNumericClass(IrBufferFormat format) {
 }
 
 IrBufferFormat RemapTextureFormat(IrBufferFormat format) {
-    return format == IrBufferFormat::Format11_11_10UInt ? IrBufferFormat::Format32UInt : format;
+    return format == IrBufferFormat::Format11_11_10UNorm || format == IrBufferFormat::Format11_11_10UInt ? IrBufferFormat::Format32UInt : format;
 }
 
 std::uint32_t DepthBitsTextureWidth(std::uint32_t word1, std::uint32_t word3) {

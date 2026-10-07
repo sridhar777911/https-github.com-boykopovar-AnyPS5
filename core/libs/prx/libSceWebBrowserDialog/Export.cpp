@@ -69,4 +69,14 @@ int APS5_VABI sceWebBrowserDialogSetCookie(void) {
     return 0;
 }
 
+int APS5_VABI sceWebBrowserDialogOpenForPredeterminedContent() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceWebBrowserDialogResetCookie() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
 }

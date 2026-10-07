@@ -306,4 +306,9 @@ int APS5_VABI sceKernelAioWaitRequest(int32_t id, int32_t* state, uint32_t* usec
     }
 }
 
+int APS5_VABI sceKernelAioPollRequests() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
 }

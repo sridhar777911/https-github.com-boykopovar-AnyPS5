@@ -123,6 +123,7 @@ struct Context {
     bool occlusionQueryPrecise = false;
     bool depthBounds = false;
     bool depthBiasClamp = false;
+    bool samplerFilterMinmax = false;
     VkBuffer emptyBuffer = VK_NULL_HANDLE;
     // The device's list of recorded dispatches whose copied written buffers await a CPU write-back
     // (VulkanDevice's State::copiedWriters; the draw counterpart is DrawCopiedWriters): an indirect
@@ -133,9 +134,11 @@ struct Context {
     // VK_EXT_descriptor_indexing with non-uniform sampled/storage image array indexing enabled
     // (bindless image tables in graphics stages).
     bool descriptorIndexing = false;
+    bool imageInt64Atomics = false;
     bool primitiveListRestart = false;
     bool imageViewMinLod = false;
     bool pipelineExecutableInfo = false;
+    std::uint32_t srgbDecodeFormats = 0;
 
     template<typename TFunction>
     TFunction Function(const char* name) const {

@@ -4,8 +4,11 @@
 #include "IntermediateRepresentation/IrProgram.hpp"
 #include "Optimization/BindingAllocator.hpp"
 #include "Recompiler.hpp"
+#include <cstdint>
 
 namespace ShaderRecompiler {
+
+std::uint32_t PointFilteredSamplerWord(std::uint32_t word0, std::uint32_t filter);
 
 class DescriptorBindingBuilder {
 public:

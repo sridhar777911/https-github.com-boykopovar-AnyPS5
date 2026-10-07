@@ -167,7 +167,9 @@ void includeInstructionVectorRegisters(const RdnaInstruction& instruction, std::
         case RdnaOpcode::DsWrite2B32:
         case RdnaOpcode::DsWrite2st64B32:
         case RdnaOpcode::DsWrite2B64:
-        case RdnaOpcode::DsWrite2st64B64: {
+        case RdnaOpcode::DsWrite2st64B64:
+        case RdnaOpcode::DsWrxchg2RtnB64:
+        case RdnaOpcode::DsWrxchg2st64RtnB64: {
             const std::uint32_t width = std::max(instruction.dataDwordCount / 2u, 1u);
             includeVector(instruction.source1, width);
             includeVector(instruction.source2, width);

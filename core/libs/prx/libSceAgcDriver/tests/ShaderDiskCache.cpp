@@ -1,5 +1,6 @@
 #include "ShaderDiskCache.hpp"
 #include "ShaderCacheDirectory.hpp"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -7,6 +8,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <random>
 #include <stdexcept>
@@ -31,7 +33,7 @@ void setEnvironment(const char* name, const std::string& value) {
 }
 
 bool sameBinding(const DescriptorBinding& left, const DescriptorBinding& right) {
-    return left.kind == right.kind && left.role == right.role && left.descriptorSet == right.descriptorSet && left.binding == right.binding && left.count == right.count && left.guestDescriptor == right.guestDescriptor && left.readOnly == right.readOnly && left.imageShape == right.imageShape && left.samplerDepthCompare == right.samplerDepthCompare && left.imageWritten == right.imageWritten && left.imageDepthCompare == right.imageDepthCompare && left.imageAtomic == right.imageAtomic && left.bufferAtomic == right.bufferAtomic && left.bufferWritten == right.bufferWritten;
+    return left.kind == right.kind && left.role == right.role && left.descriptorSet == right.descriptorSet && left.binding == right.binding && left.count == right.count && left.guestDescriptor == right.guestDescriptor && left.readOnly == right.readOnly && left.imageShape == right.imageShape && left.samplerDepthCompare == right.samplerDepthCompare && left.imageWritten == right.imageWritten && left.imageDepthCompare == right.imageDepthCompare && left.imageAtomic == right.imageAtomic && left.bufferAtomic == right.bufferAtomic && left.bufferWritten == right.bufferWritten && left.samplerUnnormalized == right.samplerUnnormalized && left.imageUnnormalized == right.imageUnnormalized && left.imageSamplers == right.imageSamplers;
 }
 
 bool sameBindings(const std::vector<DescriptorBinding>& left, const std::vector<DescriptorBinding>& right) {
@@ -95,6 +97,9 @@ DescriptorBinding sampleBinding(std::uint32_t seed) {
     binding.imageAtomic = {false, true, false};
     binding.bufferAtomic = {true};
     binding.bufferWritten = {false, false, true, true, false};
+    binding.samplerUnnormalized = {false, true, true};
+    binding.imageUnnormalized = {true, false, seed % 2 == 0};
+    binding.imageSamplers = {0x5u, 0u, 0x80000000u};
     return binding;
 }
 
@@ -159,6 +164,7 @@ CompiledVariant sampleVariant() {
     image.mipCount = 4;
     image.shaderSwizzle = 0x321u;
     image.written = true;
+    image.srgbDecode = true;
     image.cube = true;
     image.r128 = true;
     image.indirectRoot = 0;
@@ -166,7 +172,7 @@ CompiledVariant sampleVariant() {
     image.indirectSearchIterations = 3;
     image.indirectResources = {1, 2, 3};
     info.info.images = {image};
-    info.info.samplers = {{7, 0x10, true, false}};
+    info.info.samplers = {{7, 0x10, true, false, SamplerUseExplicitLod | SamplerUseGather}};
     info.info.sampledPairs = {{0, 0, 0x10}};
     StageInput input{};
     input.kind = StageInputKind::GlobalInvocationId;
@@ -326,6 +332,7 @@ void verifyKeySensitivity() {
     changes("an extension", [](SampleRequest& sample) { sample.extensions[0] = "SPV_KHR_storage_buffer_storage_clasS"; });
     changes("barycentrics", [](SampleRequest& sample) { sample.request.target.fragmentShaderBarycentricEnabled = true; });
     changes("non-constant texel offsets", [](SampleRequest& sample) { sample.request.target.nonConstantImageOffsets = true; });
+    changes("the sRGB formats decoded in the shader", [](SampleRequest& sample) { sample.request.target.srgbDecodeFormats = 2u; });
     changes("the workgroup size limit", [](SampleRequest& sample) { sample.request.target.maxWorkgroupSize[2] = 128; });
     changes("the invocation limit", [](SampleRequest& sample) { sample.request.target.maxWorkgroupInvocations = 512; });
     changes("the shared memory limit", [](SampleRequest& sample) { sample.request.target.maxWorkgroupSharedMemoryBytes = 32768; });
@@ -348,6 +355,7 @@ void verifyKeySensitivity() {
     changes("an image search depth", [](SampleRequest& sample) { sample.specialization.images[0].indirectSearchIterations = 2; });
     changes("an image cube flag", [](SampleRequest& sample) { sample.specialization.images[0].cube = true; });
     changes("an image FMASK flag", [](SampleRequest& sample) { sample.specialization.images[0].fmask = true; });
+    changes("an image sRGB decode", [](SampleRequest& sample) { sample.specialization.images[0].srgbDecode = true; });
     changes("the image count", [](SampleRequest& sample) { sample.specialization.images.emplace_back(); });
     changes("the bound descriptors", [](SampleRequest& sample) { sample.specialization.boundDescriptors.push_back(1); });
 
@@ -436,6 +444,96 @@ void verifyAcrossProcesses(const char* self) {
     require(std::system(command.c_str()) == 0, "the loading process failed");
 }
 
+struct ClockRequest {
+    std::vector<std::uint32_t> code{0xf4900100u, 0x00000000u, 0xbf8cc07fu, 0x7e020204u, 0xe0700000u, 0x80000100u, 0xf800180fu, 0x01010101u, 0xbf810000u};
+    std::array<std::uint32_t, 4> userData{0x10000000u, 0x00000000u, 0x40u, 0x00027facu};
+    std::array<std::uint32_t, 1> capabilities{1u};
+    RecompileRequest request{};
+
+    explicit ClockRequest(std::uint32_t stride = 0) {
+        userData[1] = stride << 16u;
+        ShaderPixelStageInfo pixel{};
+        pixel.inputAddr = PixelInputBit(PixelInput::PerspectiveCenter);
+        pixel.hasPerspectiveCenterVgpr = true;
+        pixel.targetOutputMode[0] = 9u;
+        pixel.targetExportMapping.fill(0xe4u);
+        request.shader = {ShaderStage::Fragment, 0x30000u, code, 0, {}};
+        request.context.waveSize = 64;
+        request.context.userDataBaseRegister = 0;
+        request.context.userData = userData;
+        request.context.pixel = pixel;
+        request.target.vulkanVersion = 0x00401000u;
+        request.target.spirvVersion = 0x00010300u;
+        request.target.subgroupSize = 32;
+        request.target.supportedCapabilities = capabilities;
+        request.layout.pushConstantSizeBytes = 128;
+    }
+};
+
+std::string emissionFailure(const RecompileRequest& request) {
+    try {
+        static_cast<void>(Recompile(request));
+    } catch (const std::runtime_error& error) {
+        const std::string message = error.what();
+        require(message.find("reads the shader clock, which needs the device's VK_KHR_shader_clock") != std::string::npos, "unexpected failure: " + message.substr(0, message.find("RecompileRequest:")));
+        return message;
+    }
+    throw std::runtime_error("a shader clock read compiled without VK_KHR_shader_clock");
+}
+
+std::uint64_t diskMisses() {
+    return ShaderDiskCache::Totals().misses;
+}
+
+void verifyEmissionFailureMemo() {
+    const auto before = ShaderDiskCache::Totals();
+    ClockRequest clock;
+    const auto first = emissionFailure(clock.request);
+    require(diskMisses() == before.misses + 1, "the first compile was not looked up");
+    require(emissionFailure(clock.request) == first, "the second compile failed with another message");
+    require(diskMisses() == before.misses + 1, "the second compile looked up and emitted the program again");
+
+    ClockRequest layout;
+    layout.request.layout = {0, 0, 16, 112};
+    static_cast<void>(emissionFailure(layout.request));
+    require(diskMisses() == before.misses + 2, "another binding layout reused the failure");
+    ClockRequest stride(16);
+    static_cast<void>(emissionFailure(stride.request));
+    require(diskMisses() == before.misses + 3, "another buffer specialization reused the failure");
+    ClockRequest relocated;
+    relocated.request.shader.codeAddress += 0x1000u;
+    static_cast<void>(emissionFailure(relocated.request));
+    require(diskMisses() == before.misses + 4, "a relocated copy reused the failure");
+    require(emissionFailure(clock.request) == first && diskMisses() == before.misses + 4, "the other requests replaced the failure");
+
+    ClockRequest concurrent;
+    concurrent.request.layout.pushConstantSizeBytes = 64;
+    std::array<std::future<std::string>, 4> failures;
+    for (auto& future : failures) future = std::async(std::launch::async, [&concurrent] { return emissionFailure(concurrent.request); });
+    std::vector<std::string> messages;
+    for (auto& future : failures) messages.push_back(future.get());
+    require(std::all_of(messages.begin(), messages.end(), [&](const std::string& message) { return message == messages.front(); }), "concurrent requests failed with different messages");
+    require(diskMisses() == before.misses + 5, "concurrent requests emitted the program " + std::to_string(diskMisses() - before.misses - 4) + " times");
+
+    ShaderDiskCache::Flush();
+    require(ShaderDiskCache::Totals().writes == before.writes, "an emission failure was stored in the disk cache");
+}
+
+int runWithoutFailureMemo() {
+    ClockRequest clock;
+    const auto first = emissionFailure(clock.request);
+    require(emissionFailure(clock.request) == first, "the second compile failed with another message");
+    require(diskMisses() == 2, "APS5_NO_FAILURE_MEMO=1 did not emit the program again (" + std::to_string(diskMisses()) + " lookups)");
+    std::cout << "APS5_NO_FAILURE_MEMO=1 emitted the failing program twice\n";
+    return 0;
+}
+
+void verifyFailureMemoSwitch(const char* self) {
+    setEnvironment("APS5_NO_FAILURE_MEMO", "1");
+    const std::string command = "\"" + std::string(self) + "\" --no-failure-memo";
+    require(std::system(command.c_str()) == 0, "the process with APS5_NO_FAILURE_MEMO=1 failed");
+}
+
 void verifyDefaultDirectory(const char* self) {
     setEnvironment("ANYPS5_SHADER_CACHE_DIR", "");
     setEnvironment("ANYPS5_NO_SHADER_CACHE", "1");
@@ -452,6 +550,7 @@ void verifyDefaultDirectory(const char* self) {
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--load") return runLoadingProcess();
+        if (argc == 2 && std::string_view(argv[1]) == "--no-failure-memo") return runWithoutFailureMemo();
         const auto directory = std::filesystem::temp_directory_path() / ("aps5-shader-disk-cache-test-" + std::to_string(std::random_device{}()));
         std::filesystem::remove_all(directory);
         verifyDefaultDirectory(argv[0]);
@@ -462,6 +561,8 @@ int main(int argc, char** argv) {
         verifyKeySensitivity();
         verifyStore();
         verifyAcrossProcesses(argv[0]);
+        verifyEmissionFailureMemo();
+        verifyFailureMemoSwitch(argv[0]);
         std::error_code error;
         std::filesystem::remove_all(directory, error);
         std::cout << "shader disk cache tests passed\n";
