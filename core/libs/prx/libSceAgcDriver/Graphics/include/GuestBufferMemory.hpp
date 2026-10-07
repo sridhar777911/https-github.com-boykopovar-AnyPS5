@@ -31,6 +31,7 @@ struct HostImport {
     std::uint64_t serial = 0;
     bool unwatched = false;
     bool dmaBuf = false;
+    std::shared_ptr<void> chunk;
 };
 
 enum class ImportWatch : std::uint8_t { Watch, Unwatch };
