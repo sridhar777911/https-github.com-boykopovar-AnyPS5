@@ -257,6 +257,15 @@ void testControls() {
     }
     check(sceVideoOutWaitVblank(handle) == 0, "vblank wait failed");
     check(owner->GetTriggeredEvents(&event, 1) == 1 && event.udata == &settings && sceVideoOutGetEventId(&event) == VIDEO_OUT_EVENT_VBLANK, "vblank event or updated user data missing");
+    std::vector<std::byte> allocation(65536 + 65535);
+    const auto storage = alignedBuffer(allocation);
+    VideoOutBuffers buffer{storage.data(), nullptr, {allocation.data(), storage.data()}};
+    VideoOutBufferAttribute2 attribute{};
+    attribute.width = 64;
+    attribute.height = 64;
+    attribute.pixel_format = 0x8000000000000000ull;
+    check(sceVideoOutRegisterBuffers2(handle, 0, 0, &buffer, 1, &attribute, 0, nullptr) == 0, "buffers with set reserved pointers were rejected");
+    check(sceVideoOutUnregisterBuffers(handle, 0) == 0, "buffer unregistration failed");
     sceVideoOutClose(handle);
     check(owner->GetTriggeredEvents(&event, 1) == 0, "closed port retained pending events");
     check(sceKernelDeleteEqueue(queue) == 0, "event queue deletion failed");
