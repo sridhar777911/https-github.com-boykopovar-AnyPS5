@@ -37,6 +37,7 @@ constexpr std::uint32_t Payload = 0x3f800000u;
 alignas(256) std::array<std::uint32_t, Lanes> Output{};
 alignas(256) std::array<std::uint32_t, 16> Root{};
 alignas(256) std::array<std::uint32_t, 4> Data{Payload, 0u, 0u, 0u};
+alignas(256) std::array<std::uint32_t, 8> Table{};
 
 alignas(256) constexpr std::array<std::uint32_t, 19> BranchCode{
     0xf4080100u, 0xfa000000u, 0xf4000200u, 0xfa000010u, 0xf4040280u, 0xfa000018u, 0xbe8c03ffu, 0x11111111u,
@@ -60,6 +61,12 @@ alignas(256) constexpr std::array<std::uint32_t, 22> ChainCode{
     0xf4080100u, 0xfa000000u, 0xf4000200u, 0xfa000010u, 0xf4040280u, 0xfa000018u, 0xbe8c03ffu, 0x11111111u,
     0xbf8cc07fu, 0xf4040385u, 0xfa000000u, 0xbf8cc07fu, 0xbf068008u, 0xbf850003u, 0xf4000307u, 0xfa000000u,
     0xbf8cc07fu, 0x7e02020cu, 0x34040082u, 0xe0701000u, 0x80010102u, 0xbf810000u,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 21> DescriptorCode{
+    0xf4080100u, 0xfa000000u, 0xf4000200u, 0xfa000010u, 0xf4040280u, 0xfa000018u, 0x7e0202ffu, 0x11111111u,
+    0xbf8cc07fu, 0xbf068008u, 0xbf850006u, 0xf4080405u, 0xfa000010u, 0xbf8cc07fu, 0xe0300000u, 0x80040100u,
+    0xbf8c3f70u, 0x34040082u, 0xe0701000u, 0x80010102u, 0xbf810000u,
 };
 
 class StderrCapture {
@@ -211,6 +218,19 @@ void RunTests(AgcDriver::VulkanDevice& device) {
     Require(chainSkipped.poisoned == 3u && Faulted(chainSkipped) && chainSkipped.log.find(Fault(0u, 0x24u)) != std::string::npos, "guarded pointer: a pointer read through a null pointer, used only by a skipped read, did not fault at its own pc:\n" + chainSkipped.log);
     const auto chainTaken = Run(device, ChainCode, 0u, 1u);
     Require(Faulted(chainTaken) && chainTaken.log.find(Fault(0u, 0x24u)) != std::string::npos, "guarded pointer: a read through a pointer read through a null pointer did not fault at the first read:\n" + chainTaken.log);
+
+    Table = {0u, 0u, 0u, 0u, static_cast<std::uint32_t>(valid), static_cast<std::uint32_t>((valid >> 32u) & 0xffffu), static_cast<std::uint32_t>(sizeof(Data)), 0x00027facu};
+    const auto table = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(Table.data()));
+    const auto descriptorTaken = Run(device, DescriptorCode, table, 1u);
+    Require(!Faulted(descriptorTaken) && descriptorTaken.poisoned == 0u && descriptorTaken.cacheable, "guarded pointer: a V# behind a mapped pointer faulted, was poisoned or left the caches:\n" + descriptorTaken.log);
+    RequireWords(descriptorTaken, Lanes, Payload, "guarded pointer: a buffer read through a V# behind a mapped pointer");
+    const auto descriptorSkipped = Run(device, DescriptorCode, 0u, 0u);
+    Require(!Faulted(descriptorSkipped) && descriptorSkipped.poisoned == 4u && !descriptorSkipped.cacheable, "guarded pointer: a V# behind a branch that skips its null pointer faulted or stayed cacheable:\n" + descriptorSkipped.log);
+    RequireWords(descriptorSkipped, 0u, 0u, "guarded pointer: a skipped V# load through a null pointer");
+    const auto descriptorNull = Run(device, DescriptorCode, 0u, 1u);
+    Require(descriptorNull.variantId == descriptorSkipped.variantId && Faulted(descriptorNull) && descriptorNull.log.find(Fault(0x10u, 0x2cu)) != std::string::npos, "guarded pointer: a V# load through a null pointer that runs did not fault at its pc and address:\n" + descriptorNull.log);
+    const auto descriptorUnmapped = Run(device, DescriptorCode, unmapped, 1u);
+    Require(Faulted(descriptorUnmapped) && descriptorUnmapped.log.find(Fault(unmapped + 0x10u, 0x2cu)) != std::string::npos, "guarded pointer: a V# load through an unmapped pointer that runs did not fault at its address:\n" + descriptorUnmapped.log);
 
 #ifdef _WIN32
     VirtualFree(reserved, 0, MEM_RELEASE);

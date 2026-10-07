@@ -2173,10 +2173,61 @@ void verifyGuardedNullPointers() {
     AgcDriver::ShaderMemory mappedChainMemory({});
     require(mappedChainMemory.Capture(chain.request)->specialization.srtPoison.empty(), "guarded pointer: a mapped pointer chain was poisoned");
 
+    const auto poisonedWords = [](const ResourceCapture& capture, std::uint32_t pc, std::uint64_t base) {
+        std::vector<std::uint64_t> addresses;
+        for (const auto& entry : capture.specialization.srtPoison) {
+            if (entry.pc != pc || capture.snapshot.flattenedSrt.at(entry.slot) != 0u) return false;
+            addresses.push_back(entry.address);
+        }
+        std::sort(addresses.begin(), addresses.end());
+        return addresses == std::vector<std::uint64_t>{base, base + 4u, base + 8u, base + 12u};
+    };
     TableRequest descriptor(descriptorCode, root.data());
-    point(0u);
-    AgcDriver::ShaderMemory descriptorMemory({});
-    expectFailure([&] { static_cast<void>(descriptorMemory.Capture(descriptor.request)); }, "null or misaligned address", "guarded pointer: a V# loaded through a null nested pointer was accepted");
+    for (const auto pointer : {std::uint64_t{0}, unmapped}) {
+        point(pointer);
+        descriptor.request.context.memory = {};
+        AgcDriver::ShaderMemory memory({});
+        const auto capture = memory.Capture(descriptor.request);
+        require(poisonedWords(*capture, 0xcu, pointer), "guarded pointer: a V# loaded through a null or unmapped nested pointer did not poison its four words at its pc");
+        require(capture->snapshot.buffers.size() == 1u && std::all_of(capture->snapshot.buffers[0].dwords.begin(), capture->snapshot.buffers[0].dwords.end(), [](std::uint32_t word) { return word == 0u; }), "guarded pointer: a V# loaded through an inaccessible pointer is not bound as zero words");
+        const auto regions = memory.Regions();
+        descriptor.request.context.memory = regions;
+        const auto result = Recompile(descriptor.request, *capture);
+        require(result->poisonedSrtReads == 4u && faultBinding(*result) && result->bdaAbiVersion == BdaAbi::Version, "guarded pointer: a variant with a poisoned V# does not report through the fault buffer");
+        const auto replay = Recompile(descriptor.request);
+        require(replay.poisonedSrtReads == 4u && replay.variantId == result->variantId, "guarded pointer: a replay did not reproduce the poisoned V#");
+    }
+
+    static std::array<std::uint32_t, 8> table{};
+    static std::array<std::uint32_t, 4> vertexRoot{};
+    const auto payloadV = TableV(&payload, 0u, 4u);
+    std::copy(payloadV.begin(), payloadV.end(), table.begin() + 4);
+    const std::vector<std::uint32_t> vertexDescriptorCode{0xf4000084u, 0xfa000000u, 0xf4040104u, 0xfa000008u, 0x7e020280u, 0xbf8cc07fu, 0xbf068002u, 0xbf850006u,
+        0xf4080302u, 0xfa000010u, 0xbf8cc07fu, 0xe0300000u, 0x80030100u, 0xbf8c3f70u, 0xf80008cfu, 0x01010101u, 0xbf810000u};
+    TableRequest vertex(vertexDescriptorCode, vertexRoot.data());
+    vertex.request.shader.stage = ShaderStage::Vertex;
+    vertex.request.context.compute.reset();
+    vertex.request.context.vertex = ShaderVertexStageInfo{};
+    vertex.request.context.userDataBaseRegister = 8;
+    const auto tableAddress = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(table.data()));
+    vertexRoot[2] = static_cast<std::uint32_t>(tableAddress);
+    vertexRoot[3] = static_cast<std::uint32_t>(tableAddress >> 32u);
+    AgcDriver::ShaderMemory mappedVertexMemory({});
+    const auto mappedVertex = mappedVertexMemory.Capture(vertex.request);
+    require(mappedVertex->specialization.srtPoison.empty() && mappedVertex->snapshot.buffers.size() == 1u && mappedVertex->snapshot.buffers[0].dwords[0] == payloadV[0], "guarded pointer: a vertex V# behind a mapped pointer was poisoned or not read");
+    vertexRoot[2] = 0u;
+    vertexRoot[3] = 0u;
+    for (const auto guard : {0u, 1u}) {
+        vertexRoot[0] = guard;
+        vertex.request.context.memory = {};
+        AgcDriver::ShaderMemory memory({});
+        const auto capture = memory.Capture(vertex.request);
+        require(poisonedWords(*capture, 0x20u, 0x10u), "guarded pointer: a vertex V# behind a branch and a null pointer did not poison its four words at its pc");
+        const auto regions = memory.Regions();
+        vertex.request.context.memory = regions;
+        const auto result = Recompile(vertex.request, *capture);
+        require(result->poisonedSrtReads == 4u && faultBinding(*result) && !result->spirv.empty(), "guarded pointer: a vertex variant with a poisoned V# has no fault buffer");
+    }
     TableRequest rootless(branchCode, nullptr);
     AgcDriver::ShaderMemory rootlessMemory({});
     expectFailure([&] { static_cast<void>(rootlessMemory.Capture(rootless.request)); }, "null or misaligned address", "guarded pointer: a null user-data pointer was accepted");
