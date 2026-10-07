@@ -37,10 +37,11 @@ jobs:
       - run: cmake -S . -B build $CONFIGURE
       - run: cmake --build build
       - run: cmake --build build --target libs
-      - run: ctest --test-dir build --output-on-failure --timeout 120 --repeat until-fail:3
+      - run: ctest --test-dir build --output-on-failure --timeout 120 --repeat until-fail:3 --output-junit ctest.xml
         env:
           ANYPS5_REQUIRE_VULKAN: 1
           GALLIUM_OVERRIDE_CPU_CAPS: avx
+      - run: python3 tools/check_skips.py build/ctest.xml
 
   windows:
     runs-on: windows-latest
@@ -78,4 +79,5 @@ jobs:
       - shell: cmd
         run: cmake --build build --target libs
       - shell: cmd
-        run: ctest --test-dir build --output-on-failure --timeout 120 --repeat until-fail:3
+        run: ctest --test-dir build --output-on-failure --timeout 120 --repeat until-fail:3 --output-junit ctest.xml
+      - run: python tools/check_skips.py build/ctest.xml --job windows
