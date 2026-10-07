@@ -3,7 +3,7 @@ import re
 import subprocess
 from pathlib import Path
 
-TEST_OUTPUT = "tests/"
+TEST_OUTPUT = r"tests[\\/]"
 
 KNOWN_UNRUN = {
     "agc_driver_bda_device_tests",
@@ -19,9 +19,14 @@ def built(build):
                             capture_output=True, text=True, check=True).stdout
     names = set()
     for line in listed.splitlines():
-        found = re.match(rf"^{TEST_OUTPUT}([A-Za-z0-9_]+)(?::|\s|$)", line)
-        if found:
-            names.add(found.group(1))
+        found = re.match(rf"^{TEST_OUTPUT}([A-Za-z0-9_.]+)", line)
+        if not found:
+            continue
+        name = found.group(1).rstrip(".")
+        if name.endswith(".exe"):
+            name = name[:-4]
+        if name:
+            names.add(name)
     return names
 
 
