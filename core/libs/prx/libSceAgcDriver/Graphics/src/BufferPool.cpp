@@ -21,7 +21,7 @@ bool sharedTiers() {
 BufferPool::BufferPool(const Context& context) : device(context.device), unmap(context.Function<PFN_vkUnmapMemory>("vkUnmapMemory")), destroyBuffer(context.Function<PFN_vkDestroyBuffer>("vkDestroyBuffer")), freeMemory(context.Function<PFN_vkFreeMemory>("vkFreeMemory")), maxSlots(std::max<std::size_t>(1, std::min<std::size_t>(MaxSlots(), context.limits.maxMemoryAllocationCount / 6u))) {
     smallTier.budget = smallBudget;
     largeTier.budget = budget;
-    deviceTier.budget = DeviceBudget();
+    deviceTier.budget = DeviceBudget(context.memory);
 }
 
 BufferPool::~BufferPool() {
@@ -32,12 +32,14 @@ BufferPool::~BufferPool() {
     }
 }
 
-VkDeviceSize BufferPool::DeviceBudget() {
-    static const VkDeviceSize deviceBudget = [] {
-        const char* value = std::getenv("APS5_STAGING_POOL_MIB");
-        return (value != nullptr ? std::strtoull(value, nullptr, 10) : 512ull) << 20u;
-    }();
-    return deviceBudget;
+VkDeviceSize BufferPool::DeviceBudget(const VkPhysicalDeviceMemoryProperties& memory) {
+    static const char* value = std::getenv("APS5_STAGING_POOL_MIB");
+    if (value != nullptr) return static_cast<VkDeviceSize>(std::strtoull(value, nullptr, 10)) << 20u;
+    VkDeviceSize largest = 0;
+    for (std::uint32_t heap = 0; heap < memory.memoryHeapCount && heap < VK_MAX_MEMORY_HEAPS; ++heap) {
+        if ((memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) largest = std::max(largest, memory.memoryHeaps[heap].size);
+    }
+    return std::max<VkDeviceSize>(VkDeviceSize{512} << 20u, largest / 8u);
 }
 
 void BufferPool::destroy(const BufferAllocation& allocation) noexcept {
@@ -55,7 +57,7 @@ std::size_t BufferPool::Capacity(std::size_t bytes) {
 }
 
 BufferPool::Tier& BufferPool::tierFor(std::size_t capacity, VkMemoryPropertyFlags properties) {
-    if ((properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 && (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0 && DeviceBudget() != 0) return deviceTier;
+    if ((properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 && (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0 && deviceTier.budget != 0) return deviceTier;
     return !sharedTiers() && capacity < classLimit ? smallTier : largeTier;
 }
 
