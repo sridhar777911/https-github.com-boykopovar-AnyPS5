@@ -11,7 +11,7 @@
 ### Silent stubs
 
 Throughout the project, every function at every stage either **does exactly what it's supposed to or throws an exception**. Everywhere... except:
-- [libSceSaveDataDialog.native](../../core/libs/prx/libSceSaveDataDialog.native/Export.cpp)
+- [libSceSaveDataDialog.native](../../core/libs/prx/libSceSaveDataDialog.native/Export.cpp) shows no UI and ignores progress values. Progress-bar mode (5) stays running until the caller closes it, matching Skyrim PPSA03747's save sequence; other modes still finish immediately and return button 1 and the first nonempty directory name. Console dialog timing and selection behavior remain unverified.
 - [libSceMsgDialog.native](../../core/libs/prx/libSceMsgDialog.native/Export.cpp) - dialogs finish at `sceMsgDialogOpen` without UI and answer with button 1, so `sceMsgDialogClose` returns `NOT_RUNNING`; its result before `sceMsgDialogInitialize` follows libSceMsgDialog
 - [libSceCommonDialog](../../core/libs/prx/libSceCommonDialog/Export.cpp)
 - [libSceErrorDialog](../../core/libs/prx/libSceErrorDialog/Export.cpp) - the error dialog runs the state machine but shows nothing; the error code passed to `sceErrorDialogOpen` is only logged
