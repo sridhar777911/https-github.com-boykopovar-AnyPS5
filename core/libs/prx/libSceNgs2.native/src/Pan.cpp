@@ -54,11 +54,7 @@ static void AddBetweenSpeakers(const Ngs2PanWork& work, std::uint32_t speaker, f
     gains[speaker] += EqualPower(position) * weight;
 }
 
-#pragma GCC visibility push(default)
-
-extern "C" {
-
-int APS5_VABI sceNgs2PanInit(Ngs2PanWork* work, const float* speaker_angles, float unit_angle, uint32_t num_speakers) {
+int Ngs2PanInit(Ngs2PanWork* work, const float* speaker_angles, float unit_angle, uint32_t num_speakers) {
     if (work == nullptr) APS5_INVALID_ARG_EX;
     if (speaker_angles != nullptr && !IsUnitAngle(unit_angle)) APS5_INVALID_ARG_EX;
     const auto* layout = LayoutFor(num_speakers);
@@ -90,7 +86,7 @@ int APS5_VABI sceNgs2PanInit(Ngs2PanWork* work, const float* speaker_angles, flo
     return SCE_NGS2_OK;
 }
 
-int APS5_VABI sceNgs2PanGetVolumeMatrix(Ngs2PanWork* work, const Ngs2PanParam* params, uint32_t num_params, uint32_t matrix_format, float* out_volume_matrix) {
+int Ngs2PanGetVolumeMatrix(Ngs2PanWork* work, const Ngs2PanParam* params, uint32_t num_params, uint32_t matrix_format, float* out_volume_matrix) {
     if (work == nullptr || params == nullptr) APS5_INVALID_ARG_EX;
     if (out_volume_matrix == nullptr) return SCE_NGS2_ERROR_INVALID_OUT_ADDRESS;
     if (matrix_format != 1 && matrix_format != 2 && matrix_format != 6 && matrix_format != 8) APS5_INVALID_ARG_EX;
@@ -129,7 +125,3 @@ int APS5_VABI sceNgs2PanGetVolumeMatrix(Ngs2PanWork* work, const Ngs2PanParam* p
     }
     return SCE_NGS2_OK;
 }
-
-}
-
-#pragma GCC visibility pop
