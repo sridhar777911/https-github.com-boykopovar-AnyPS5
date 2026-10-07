@@ -272,6 +272,7 @@ public:
     // Keeps the image current with guest memory (see GuestMemory::CollectWrites).
     bool Refresh();
     std::uint64_t GuestBytes() const;
+    VkDeviceSize AllocationBytes() const { return memoryBytes; }
 
 private:
     // The regions of every array layer, or of the tracked layers `layers` selects.
@@ -439,6 +440,7 @@ private:
     bool lent = false;
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize memoryBytes = 0;
     VkImageView view = VK_NULL_HANDLE;
     std::uint32_t defaultMip = 0;
     std::map<std::uint32_t, VkImageView> extraViews;
