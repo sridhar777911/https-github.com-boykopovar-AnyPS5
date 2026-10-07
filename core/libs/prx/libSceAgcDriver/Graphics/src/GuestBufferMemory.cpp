@@ -1002,6 +1002,19 @@ MirrorStats MirrorCounters() {
     return stats;
 }
 
+void ClearImageMirrors(VkDevice device) {
+    auto& state = Mirrors();
+    std::map<std::uint64_t, std::shared_ptr<ImageMirror>> entries;
+    {
+        std::lock_guard lock(state.mutex);
+        if (state.device != device) return;
+        entries.swap(state.entries);
+        state.failed.clear();
+        state.heapBytes = 0;
+        state.device = VK_NULL_HANDLE;
+    }
+}
+
 ImportProbe ProbeImportWriteProtection(const Context& context) {
     ImportProbe probe;
 #ifdef _WIN32

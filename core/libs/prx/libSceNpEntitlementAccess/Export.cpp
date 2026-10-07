@@ -144,4 +144,9 @@ int APS5_VABI sceNpEntitlementAccessRequestUnifiedEntitlementInfo(void) {
     return 0;
 }
 
+int APS5_VABI sceNpEntitlementAccessGetPftFlag(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
 }

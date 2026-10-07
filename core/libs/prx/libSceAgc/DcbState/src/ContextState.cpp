@@ -69,9 +69,8 @@ std::uint32_t APS5_VABI sceAgcDcbSetBaseDrawIndirectArgsGetSize() {
     return 16;
 }
 
-uint32_t APS5_VABI sceAgcDcbQueueEndOfShaderActionGetSize() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
+std::uint32_t APS5_VABI sceAgcDcbQueueEndOfShaderActionGetSize() {
+    return 32;
 }
 
 std::uint32_t APS5_VABI sceAgcDcbGetLodStatsGetSize() {

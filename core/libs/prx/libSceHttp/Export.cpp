@@ -369,4 +369,25 @@ int APS5_VABI sceHttpGetLastErrno(int request_id, int* errno_out) {
     *errno_out = 0;
     return 0;
 }
+
+int APS5_VABI sceHttpsGetSslError(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceHttpSetCookieRecvCallback(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceHttpsSetSslVersion(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceHttpSetRedirectCallback(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
 }

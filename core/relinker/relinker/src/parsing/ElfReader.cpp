@@ -1,8 +1,11 @@
 #include <relinker/parsing/ElfReader.hpp>
+#include <elfpatcher/general/ElfConstants.hpp>
 #include <relinker/domain/Types.hpp>
 #include <cstring>
 
 namespace Relinker {
+
+using namespace Elfpatcher;
 
 namespace {
 
@@ -170,24 +173,31 @@ std::string ElfReader::_resolveShdrName(std::uint32_t nameOffset, const ElfHeade
 }
 
 std::vector<DynamicTag> ElfReader::ReadDynamicTags(const ProgramHeader& dynamicHeader) const {
+    if (!_rangeFits(dynamicHeader.Offset, dynamicHeader.FileSize, _fileBuffer.size())) {
+        throw RelinkerException("Dynamic segment out of bounds", dynamicHeader.Offset);
+    }
+    if (dynamicHeader.FileSize % 16 != 0) {
+        throw RelinkerException("Invalid dynamic segment size", dynamicHeader.Offset);
+    }
+
     std::vector<DynamicTag> tags;
     FileByteOffset offset = dynamicHeader.Offset;
     const FileByteOffset end = dynamicHeader.Offset + dynamicHeader.FileSize;
 
-    while (offset + 16 <= end && offset + 16 <= _fileBuffer.size()) {
+    while (offset < end) {
         DynamicTag tag;
         tag.Tag = static_cast<std::int64_t>(_readU64At(offset));
         tag.Value = _readU64At(offset + 0x08);
 
         if (tag.Tag == 0) {
-            break;
+            return tags;
         }
 
         tags.push_back(tag);
         offset += 16;
     }
 
-    return tags;
+    throw RelinkerException("Unterminated dynamic segment", dynamicHeader.Offset);
 }
 
 FileByteOffset ElfReader::TranslateVirtualAddress(VirtualAddress address) const {
@@ -200,8 +210,6 @@ FileByteOffset ElfReader::TranslateVirtualAddress(VirtualAddress address) const 
         const FileByteOffset segOffset = _readU64At(offset + 0x08);
         const VirtualAddress segVAddr = _readU64At(offset + 0x10);
         const ByteCount segFileSize = _readU64At(offset + 0x20);
-
-        static constexpr std::uint32_t PT_LOAD = 1;
 
         if (type == PT_LOAD && address >= segVAddr && address < segVAddr + segFileSize) {
             return segOffset + (address - segVAddr);

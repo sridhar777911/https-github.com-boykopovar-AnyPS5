@@ -873,6 +873,19 @@ bool TranslationContext::packB16(const RdnaInstruction& inst, bool high0, bool h
     return true;
 }
 
+bool TranslationContext::vCvtPk16I32(const RdnaInstruction& inst, bool sign) {
+    const auto saturate = [&](std::uint32_t index) {
+        const IrU32 source = readU32(sourceAt(inst, index));
+        if (sign) {
+            return IrU32(ir.Emit(IrOpcode::SMax32, IrType::U32, {&ir.Emit(IrOpcode::SMin32, IrType::U32, {&source.Value(), &ir.Constant(0x7fffu)}), &ir.Constant(0xffff8000u)}));
+        }
+        return IrU32(ir.Emit(IrOpcode::UMin32, IrType::U32, {&source.Value(), &ir.Constant(0xffffu)}));
+    };
+    const IrU32 result = packU16Lanes(saturate(0u), saturate(1u));
+    writeOperand(inst.destination, &result.Value());
+    return true;
+}
+
 void TranslateIntegerInstruction(TranslationContext& context, const RdnaInstruction& instruction) {
     throw std::runtime_error("TranslateIntegerInstruction not implemented");
 }

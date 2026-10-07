@@ -17,6 +17,7 @@ void* ApplicationHeapRealign_nid_no_patch(void*, std::size_t, std::size_t);
 char* APS5_VABI strdup_nid_postfix(const char*);
 char* APS5_VABI strndup_nid_postfix(const char*, std::size_t);
 int* APS5_VABI __error_nid_postfix();
+int APS5_VABI atexit_nid_postfix(void (APS5_VABI*)());
 }
 
 namespace {
@@ -42,6 +43,9 @@ void reject(TAction action) {
 
 void APS5_VABI initialize() { ++initializes; }
 void APS5_VABI finalize() { require(initializes == 1); }
+void APS5_VABI exitCallbackAllocates() {
+    if (ApplicationHeapAllocate_nid_no_patch(16) != storage.data()) throw std::runtime_error("application heap test failed");
+}
 
 void* APS5_VABI allocate(std::size_t bytes) {
     lastSize = bytes;
@@ -110,6 +114,12 @@ int main(int argc, char** argv) {
     write(replacement, 0x40, &align);
     write(replacement, 0x48, &realign);
     write(replacement, 0x50, &posixAlign);
+    if (argc > 1 && std::strcmp(argv[1], "exit-order") == 0) {
+        require(atexit_nid_postfix(exitCallbackAllocates) == 0);
+        ApplicationHeapInitialize_nid_no_patch(process.data());
+        require(initializes == 1);
+        return 0;
+    }
     if (argc > 1 && std::strcmp(argv[1], "default") == 0) {
         std::array<void*, 10> partial{};
         partial[0] = reinterpret_cast<void*>(&allocate);

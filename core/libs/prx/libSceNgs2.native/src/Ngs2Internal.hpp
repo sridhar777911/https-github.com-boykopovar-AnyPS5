@@ -13,6 +13,7 @@
 #include "prx/libSceNgs2.native/include/Ngs2Types.hpp"
 
 static constexpr std::uint32_t NGS2_MAX_CHANNELS = 8;
+static constexpr std::uint32_t MIN_GRAIN_SAMPLES = 64;
 
 struct Ngs2System;
 struct Ngs2Rack;
@@ -101,6 +102,8 @@ struct Ngs2Voice {
     std::vector<std::vector<float>> matrices;
     std::vector<Ngs2Filter> filters;
     std::uint32_t outputId = 0;
+    float fbwLevel = 1.0f;
+    float lfeLevel = 1.0f;
     std::vector<Ngs2UserFx2> userFx;
     std::vector<float> samples;
     bool rendering = false;
@@ -115,8 +118,13 @@ struct Ngs2Voice {
 struct Ngs2Rack {
     Ngs2System* system = nullptr;
     std::uint32_t rackId = 0;
+    std::uint32_t uid = 0;
+    char name[64] = {};
     std::uint32_t maxChannels = 0;
     std::uint32_t maxFilters = 0;
+    std::uint32_t maxGrainSamples = 0;
+    std::uint32_t maxChannelWorks = 0;
+    std::uint32_t maxInputs = 0;
     Ngs2ContextBufferInfo bufferInfo{};
     Ngs2BufferAllocator allocator{};
     std::vector<Ngs2Voice> voices;

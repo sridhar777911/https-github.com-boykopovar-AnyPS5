@@ -9,6 +9,7 @@
 extern "C" {
 void APS5_VABI sceAudio3dGetDefaultOpenParameters(Audio3dOpenParameters* parameters);
 int APS5_VABI sceAudio3dInitialize(std::int64_t reserved);
+int APS5_VABI sceAudio3dTerminate();
 int APS5_VABI sceAudio3dPortOpen(int user_id, const Audio3dOpenParameters* parameters, std::uint32_t* id);
 int APS5_VABI sceAudio3dPortClose(std::uint32_t port_id);
 int APS5_VABI sceAudio3dPortSetAttribute(std::uint32_t port_id, std::uint32_t attribute_id, const void* attribute, std::size_t attribute_size);
@@ -62,6 +63,7 @@ void RequireLevel(std::uint32_t level, std::uint32_t available, const char* mess
 void CheckBeforeInitialize() {
     std::uint32_t id = 7;
     Audio3dOpenParameters parameters = Defaults();
+    Require(sceAudio3dTerminate() == NOT_READY, "terminate before initialize must be NOT_READY");
     Require(sceAudio3dInitialize(1) == INVALID_PARAMETER, "non-zero reserved must be rejected");
     Require(Open(parameters, &id) == NOT_READY, "open before initialize must be NOT_READY");
     Require(id == 7, "a failed open must not write the port id");
@@ -177,6 +179,22 @@ void CheckQueue() {
     Require(sceAudio3dPortClose(0) == 0, "close");
 }
 
+void CheckTerminate() {
+    std::uint32_t id = 7;
+    const Audio3dOpenParameters parameters = Defaults();
+    Require(Open(parameters, &id) == 0 && id == 0, "open before terminate");
+    Require(sceAudio3dTerminate() == NOT_READY, "terminate with an open port must be NOT_READY");
+    Require(sceAudio3dPortClose(0) == 0, "close before terminate");
+    Require(sceAudio3dTerminate() == 0, "terminate");
+    Require(sceAudio3dTerminate() == NOT_READY, "double terminate must be NOT_READY");
+    id = 7;
+    Require(Open(parameters, &id) == NOT_READY && id == 7, "open after terminate must be NOT_READY");
+    Require(sceAudio3dInitialize(0) == 0, "initialize after terminate");
+    Require(Open(parameters, &id) == 0 && id == 0, "open after reinitialize");
+    Require(sceAudio3dPortClose(0) == 0, "close after reinitialize");
+    Require(sceAudio3dTerminate() == 0, "terminate after reinitialize");
+}
+
 }
 
 int main() {
@@ -184,4 +202,5 @@ int main() {
     CheckOpenParameters();
     CheckOpenClose();
     CheckQueue();
+    CheckTerminate();
 }

@@ -76,7 +76,17 @@ int ScanGuest(const char* buffer, const char* format, bool secure, NextPointer n
         }
         ++cursor;
         if (conversion == 'n') {
-            if (!suppress) *static_cast<int*>(nextPointer()) = static_cast<int>(input - buffer);
+            if (!suppress) {
+                void* target = nextPointer();
+                const auto count = input - buffer;
+                if (length == "hh") *static_cast<signed char*>(target) = static_cast<signed char>(count);
+                else if (length == "h") *static_cast<short*>(target) = static_cast<short>(count);
+                else if (length.empty()) *static_cast<int*>(target) = static_cast<int>(count);
+                else if (length == "l" || length == "ll" || length == "j" || length == "z" || length == "t") {
+                    const std::int64_t value = count;
+                    std::memcpy(target, &value, sizeof(value));
+                } else throw std::invalid_argument("Invalid scan count length");
+            }
             continue;
         }
         if (conversion != 'c' && conversion != '[') {
@@ -208,7 +218,7 @@ int APS5_VABI fscanf_nid_postfix(FileStream* stream, const char* format, ...) {
 #ifdef _WIN32
     __builtin_sysv_va_list args;
     __builtin_sysv_va_start(args, format);
-    const int result = std::vfscanf(native, format, *reinterpret_cast<std::va_list*>(args));
+    const int result = LibcDetail::ScanFileWindows_nid_no_patch(native, format, args);
     __builtin_sysv_va_end(args);
 #else
     std::va_list args;

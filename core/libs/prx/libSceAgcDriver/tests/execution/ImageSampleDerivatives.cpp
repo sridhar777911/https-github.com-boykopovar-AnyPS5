@@ -329,10 +329,12 @@ int main() {
         if (device->Target().subgroupSize < Threads) {
             std::printf("EXEC-masked cases skipped, subgroup size %u cannot hold a wave32\n", device->Target().subgroupSize);
         }
+        const bool computedOffsets = device->Target().nonConstantImageOffsets;
+        if (!computedOffsets) std::puts("2D cases skipped, their computed texel offsets need VK_KHR_maintenance8");
         std::vector<std::uint32_t> waves{Threads};
         if (device->Target().subgroupSize >= Threads) waves.push_back(Wave64Threads);
         for (const auto threads : waves) {
-            Run(*device, Code2D, threads, 9u, Height, 1u, Names2D, Masked2D, Expected2D);
+            if (computedOffsets) Run(*device, Code2D, threads, 9u, Height, 1u, Names2D, Masked2D, Expected2D);
             Run(*device, Code3D, threads, 10u, Height, Depth, Names3D, Masked3D, Expected3D);
             Run(*device, Code1D, threads, 8u, 1u, 1u, Names1D, Masked1D, Expected1D);
         }

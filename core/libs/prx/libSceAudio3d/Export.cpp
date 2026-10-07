@@ -74,6 +74,13 @@ int APS5_VABI sceAudio3dInitialize(int64_t reserved) {
     return 0;
 }
 
+int APS5_VABI sceAudio3dTerminate() {
+    std::lock_guard lock(g_mutex);
+    if (!g_initialized || g_port.open) return AUDIO3D_ERROR_NOT_READY;
+    g_initialized = false;
+    return 0;
+}
+
 int APS5_VABI sceAudio3dPortAdvance(uint32_t port_id) {
     std::lock_guard lock(g_mutex);
     if (!PortIsOpen(port_id)) return AUDIO3D_ERROR_INVALID_PORT;

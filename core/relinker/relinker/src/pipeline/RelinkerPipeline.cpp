@@ -1,11 +1,15 @@
 #include <relinker/pipeline/RelinkerPipeline.hpp>
+#include <elfpatcher/general/ElfConstants.hpp>
 #include <relinker/analysis/ValidationPolicy.hpp>
 #include <relinker/analysis/UnusedNidFilter/PltCompactor.hpp>
 #include <sstream>
 #include <iostream>
 #include <cstring>
+#include <domain/ImportModule.hpp>
 
 namespace Relinker {
+
+using namespace Elfpatcher;
 
 RelinkerPipeline::RelinkerPipeline(std::shared_ptr<IElfReader> elfReader, std::shared_ptr<ISyscallScanner> syscallScanner, std::shared_ptr<ICallSiteResolver> callSiteResolver, std::shared_ptr<IValidationPolicy> validationPolicy, std::shared_ptr<ISysVDynamicSectionBuilder> dynamicSectionBuilder, std::shared_ptr<IUnusedNidFilter> unusedNidFilter, std::uint32_t unusedFilterLevel)
     : _elfReader(std::move(elfReader))
@@ -175,6 +179,12 @@ RelinkResult RelinkerPipeline::Relink(const std::vector<std::uint8_t>& sourceElf
         if (policy) policy->RegisterLibraryImport(snd);
     }
 
+    std::map<std::uint64_t, std::string> importModules;
+    for (const auto& tag : dynTags) {
+        if (tag.Tag == 0x61000045 && !importModules.emplace(tag.Value >> 48, readCStr(tag.Value & 0xffffffffu)).second)
+            throw RelinkerException("Duplicate import module ID");
+    }
+
     auto extractRela = [&](const FileByteOffset relaOff, const ByteCount relaSize) {
         for (ByteCount off = 0; off + relaEntSize <= relaSize; off += relaEntSize) {
             const FileByteOffset pos = relaOff + off;
@@ -203,7 +213,8 @@ RelinkResult RelinkerPipeline::Relink(const std::vector<std::uint8_t>& sourceElf
             std::uint32_t nameOff = 0;
             std::memcpy(&nameOff, raw.data() + symOff, 4);
 
-            nidRefs.push_back({readCStr(nameOff), {}, relType, pos, rOffset, rAddend});
+            const auto name = readCStr(nameOff);
+            nidRefs.push_back({name, Domain::ImportModule(name, importModules, neededLibraries), relType, pos, rOffset, rAddend});
         }
     };
 
@@ -217,8 +228,6 @@ RelinkResult RelinkerPipeline::Relink(const std::vector<std::uint8_t>& sourceElf
         _syscallScanner->ScanCodeSectionForSyscalls(segment, segmentVAddr, segment.size());
 
     _validationPolicy->ValidateSyscallAbsence();
-
-    static constexpr std::uint32_t R_X86_64_JUMP_SLOT = 7;
 
     const std::size_t originalNidCount = nidRefs.size();
     const auto originalNidRefs = nidRefs;
@@ -272,8 +281,6 @@ RelinkResult RelinkerPipeline::Relink(const std::vector<std::uint8_t>& sourceElf
         pltCount = compacted.SlotCount;
     }
     auto dynSection = _dynamicSectionBuilder->BuildDynamicSection(dynamicRefs, neededLibraries, dynJmpRelOffset, pltCount);
-
-    static constexpr std::uint32_t R_X86_64_RELATIVE = 8;
 
     auto appendRela = [&](std::vector<std::uint8_t>& buf, std::uint64_t offset, std::uint64_t info, std::int64_t addend) {
         std::size_t pos = buf.size();
