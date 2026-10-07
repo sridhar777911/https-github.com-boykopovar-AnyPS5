@@ -49,7 +49,8 @@ int main() {
 
     const char request[] = "guest TCP loopback";
     char received[sizeof(request)]{};
-    Require(send_nid_postfix(client, request, sizeof(request), 0) == sizeof(request));
+    Require(send_nid_postfix(client, request, sizeof(request), 0x1) == -1 && *__error_nid_postfix() == 45);
+    Require(send_nid_postfix(client, request, sizeof(request), 0x20000) == sizeof(request));
     Require(recv_nid_postfix(accepted, received, sizeof(received), 0) == sizeof(received));
     Require(std::strcmp(request, received) == 0);
 
