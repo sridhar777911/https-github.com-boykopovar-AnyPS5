@@ -90,6 +90,10 @@ void heapMirrorTests(const Context& context, const BdaTestAccess& access) {
     guest[65536 + 7] = 0x44;
     Require(build(0, {}) == first && MirrorCounters().blocksCopied == one.blocksCopied + 2, "two written heap blocks were not read again");
     Require(access.addressBytes(first)[5] == std::byte{0x33} && access.addressBytes(first)[65536 + 7] == std::byte{0x44}, "the heap mirror missed the CPU writes");
+    const auto quiet = MirrorCounters();
+    Require(build(0, {}) == first && MirrorCounters().heapChecks == quiet.heapChecks && MirrorCounters().sweeps == quiet.sweeps && MirrorCounters().blocksCopied == quiet.blocksCopied, "an unchanged heap range was compared block by block or the mirrors were swept again");
+    guest[65536 + 9] = 0x66;
+    Require(build(0, {}) == first && MirrorCounters().heapChecks > quiet.heapChecks && MirrorCounters().blocksCopied == quiet.blocksCopied + 1 && access.addressBytes(first)[65536 + 9] == std::byte{0x66}, "a CPU write after an unchanged build was missed");
     registry(false, false);
     sweep();
     const auto swept = MirrorCounters();
@@ -104,6 +108,13 @@ void heapMirrorTests(const Context& context, const BdaTestAccess& access) {
     });
     Require(guest[16] == 0x77 && guest[16 + 8] == 0x55, "a writable heap mirror's write-back lost the GPU's store or rolled back the CPU's");
     Require(build(0, {}) == device && access.addressBytes(device)[16] == std::byte{0x77} && access.addressBytes(device)[16 + 8] == std::byte{0x55}, "the writable heap mirror missed the stores");
+    Require(build(address + 40, [&](GuestBufferMemory& leased) {
+        std::uint32_t adjustment = 0;
+        const auto view = leased.Descriptor(address + 40, 8, adjustment);
+        access.bytes(view.buffer)[view.offset + adjustment] = std::byte{0x78};
+    }) == device && guest[40] == 0x78, "a writable heap mirror's second write-back lost the GPU's store");
+    guest[65536 + 1] = 0x79;
+    Require(build(0, {}) == device && access.addressBytes(device)[40] == std::byte{0x78} && access.addressBytes(device)[65536 + 1] == std::byte{0x79}, "the writable heap mirror missed a store after a write-back");
     registry(false, true);
     sweep();
     Require(MirrorCounters().heapMirrors == before.heapMirrors, "the writable heap mirror outlived its range");
