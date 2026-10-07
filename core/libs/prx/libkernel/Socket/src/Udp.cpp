@@ -5,6 +5,7 @@
 #else
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <poll.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <cerrno>
@@ -164,6 +165,39 @@ int GuestSockets::Close(int descriptor) {
 bool GuestSockets::IsOpen(int descriptor) {
     std::lock_guard lock(socketsMutex);
     return sockets.contains(descriptor);
+}
+
+bool GuestSockets::Ready(int descriptor, bool write, std::int64_t* data, bool* eof) {
+    std::shared_ptr<Socket> socket;
+    {
+        std::lock_guard lock(socketsMutex);
+        const auto found = sockets.find(descriptor);
+        if (found == sockets.end()) return false;
+        socket = found->second;
+    }
+#ifdef _WIN32
+    WSAPOLLFD entry{socket->value, static_cast<SHORT>(write ? POLLWRNORM : POLLRDNORM), 0};
+    if (WSAPoll(&entry, 1, 0) <= 0) return false;
+#else
+    pollfd entry{socket->value, static_cast<short>(write ? POLLOUT : POLLIN), 0};
+    if (::poll(&entry, 1, 0) <= 0) return false;
+#endif
+    *eof = (entry.revents & (POLLHUP | POLLERR)) != 0;
+    *data = 0;
+    if (write) {
+        int size = 0;
+        socklen_t length = sizeof(size);
+        if (getsockopt(socket->value, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<char*>(&size), &length) == 0) *data = size;
+    } else {
+#ifdef _WIN32
+        unsigned long available = 0;
+        if (ioctlsocket(socket->value, FIONREAD, &available) == 0) *data = static_cast<std::int64_t>(available);
+#else
+        int available = 0;
+        if (::ioctl(socket->value, FIONREAD, &available) == 0) *data = available;
+#endif
+    }
+    return true;
 }
 
 extern "C" {
