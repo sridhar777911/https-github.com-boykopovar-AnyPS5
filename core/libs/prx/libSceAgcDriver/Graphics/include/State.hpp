@@ -89,6 +89,7 @@ struct State {
     VkViewport viewport;
     bool negativeOneToOne;
     bool depthClamp = false;
+    VkConservativeRasterizationModeEXT conservativeRasterization = VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
     VkRect2D scissor;
     VkCullModeFlags cullMode;
     VkFrontFace frontFace;
