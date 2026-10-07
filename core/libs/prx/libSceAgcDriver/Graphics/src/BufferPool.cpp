@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <new>
+#include <system_error>
 
 namespace AgcDriver::Graphics {
 
@@ -150,7 +152,9 @@ VkDeviceSize BufferPool::Trim() noexcept {
             tier->retainedBytes = 0;
             tier->slots = 0;
         }
-    } catch (...) {
+    } catch (const std::bad_alloc&) {
+        return 0;
+    } catch (const std::system_error&) {
         return 0;
     }
     for (const auto& gone : evicted) destroy(gone);
