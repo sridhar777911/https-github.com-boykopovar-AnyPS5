@@ -11,8 +11,10 @@
 #endif
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -217,6 +219,71 @@ void heapMirrorTests(const Context& context, const BdaTestAccess& access) {
         GuestArena::GuestArenaRelease_nid_postfix(raw, size);
     }
 #endif
+    {
+        constexpr std::size_t large = 36 * 65536;
+        constexpr std::size_t small = 17 * 65536;
+        constexpr std::size_t total = 2 * large + small;
+        void* raw = GuestArena::GuestArenaAllocate_nid_postfix(total, 65536);
+#ifdef _WIN32
+        GuestArena::GuestArenaCommit_nid_postfix(raw, total, PAGE_READWRITE, total);
+#endif
+        auto* const heap = static_cast<std::uint8_t*>(raw);
+        const std::array<std::uint8_t*, 3> heaps{heap, heap + large, heap + 2 * large};
+        const std::array<std::size_t, 3> sizes{large, large, small};
+        for (std::size_t index = 0; index < heaps.size(); ++index) std::memset(heaps[index], 0x21 + static_cast<int>(index), sizes[index]);
+        const auto change = [&](std::initializer_list<std::size_t> added, std::initializer_list<std::size_t> removed) {
+            auto* mutation = GuestAllocations::GuestAllocationsBegin_nid_postfix();
+            for (const auto index : removed) GuestAllocations::GuestAllocationsRemove_nid_postfix(mutation, heaps[index]);
+            for (const auto index : added) GuestAllocations::GuestAllocationsAdd_nid_postfix(mutation, heaps[index], sizes[index], true, false);
+            GuestAllocations::GuestAllocationsEnd_nid_postfix(mutation);
+        };
+        const auto mirrored = [&](std::size_t index) {
+            GuestBufferMemory leased(context);
+            leased.AcquireRegistered();
+            leased.Upload(true);
+            const auto ranges = leased.AddressRanges();
+            const auto begin = reinterpret_cast<std::uintptr_t>(heaps[index]);
+            const auto found = std::find_if(ranges.begin(), ranges.end(), [&](const auto& entry) { return entry.begin == begin && entry.end == begin + sizes[index]; });
+            Require(found != ranges.end(), "a mirrored heap range is missing from the BDA table");
+            const auto last = access.addressBytes(found->deviceAddress)[sizes[index] - 1];
+            leased.WriteBack();
+            return last;
+        };
+        sweep();
+        const auto before = MirrorCounters();
+        change({0}, {});
+        Require(mirrored(0) == std::byte{0x21}, "the first heap range was not mirrored");
+        const auto one = MirrorCounters();
+        access.limitMemory(large - 1);
+        change({1}, {0});
+        Require(mirrored(1) == std::byte{0x22}, "a heap mirror past APS5_HEAP_MIRROR_MIB was not made in the memory of the expired mirror");
+        const auto swept = MirrorCounters();
+        Require(swept.heapMirrors == one.heapMirrors && swept.heapBytes == one.heapBytes, "the expired heap mirror was not swept before the allocation");
+        access.limitMemory(small - 1);
+        change({2}, {});
+        char expected[64];
+        std::snprintf(expected, sizeof(expected), "heap mirror of 0x%llx+0x%llx: ", static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(heaps[2])), static_cast<unsigned long long>(small));
+        const auto attempts = access.allocationAttempts();
+        bool refused = false;
+        try {
+            mirrored(2);
+        } catch (const std::runtime_error& error) {
+            const std::string what = error.what();
+            refused = what.find(expected) != std::string::npos && what.find("Vulkan result -2") != std::string::npos;
+        }
+        Require(refused, "a heap mirror the memory cannot hold did not fail its build with the Vulkan result");
+        Require(access.allocationAttempts() == attempts + 1, "a refused heap mirror was allocated again");
+        Require(MirrorCounters().heapMirrors == swept.heapMirrors && MirrorCounters().heapBytes == swept.heapBytes, "a refused heap mirror was registered");
+        access.limitMemory(std::nullopt);
+        Require(mirrored(2) == std::byte{0x23} && MirrorCounters().heapMirrors == swept.heapMirrors + 1, "a heap mirror was not made once the memory was free again");
+        change({}, {1, 2});
+        sweep();
+        Require(MirrorCounters().heapMirrors == before.heapMirrors && MirrorCounters().heapBytes == before.heapBytes, "the heap mirrors outlived their ranges");
+#ifdef _WIN32
+        GuestArena::GuestArenaReset_nid_postfix(raw, total);
+#endif
+        GuestArena::GuestArenaRelease_nid_postfix(raw, total);
+    }
 #ifdef _WIN32
     GuestArena::GuestArenaReset_nid_postfix(block, bytes);
 #endif
