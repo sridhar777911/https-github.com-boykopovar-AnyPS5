@@ -95,6 +95,7 @@ private:
     bool bufferAtomic(const RdnaInstruction& inst, IrOpcode opcode);
     bool imageAtomic(const RdnaInstruction& inst, IrOpcode opcode);
     bool dsAtomic(const RdnaInstruction& inst, IrOpcode opcode, bool returnsValue);
+    bool dsWrxchg2(const RdnaInstruction& inst);
     bool flatLoad(const RdnaInstruction& inst);
     bool flatStore(const RdnaInstruction& inst);
     bool flatAtomic(const RdnaInstruction& inst, IrOpcode opcode);
@@ -255,6 +256,7 @@ private:
     bool integerDot(const RdnaInstruction& inst, std::uint32_t elementBits, bool sign, bool accumulator);
     bool vCndmaskB32(const RdnaInstruction& inst);
     bool packB16(const RdnaInstruction& inst, bool high0, bool high1);
+    bool vCvtPk16I32(const RdnaInstruction& inst, bool sign);
     void sSubvectorLoop(const RdnaInstruction& inst, bool begin);
     void sSaveexec(const RdnaInstruction& inst, IrOpcode operation, bool negateExec, bool negateSource, bool write64, bool negateResult = false, bool writeResult = false);
     void addU32(const RdnaInstruction& inst, bool vector, bool useCarryIn);

@@ -13,7 +13,6 @@
 #include "prx/libc/include/General.hpp"
 #include "Ngs2Internal.hpp"
 
-static constexpr std::uint32_t MIN_GRAIN_SAMPLES = 64;
 
 static std::vector<Ngs2System*>& Systems() {
     static std::vector<Ngs2System*> systems;

@@ -227,6 +227,13 @@ int APS5_VABI memcpy_s_nid_postfix(void* dest, size_t destsz, const void* src, s
         std::memset(dest, 0, destsz);
         return src ? GuestErange : GuestEinval;
     }
+    const auto destination = reinterpret_cast<std::uintptr_t>(dest);
+    const auto source = reinterpret_cast<std::uintptr_t>(src);
+    const auto distance = destination < source ? source - destination : destination - source;
+    if (count != 0 && distance < count) {
+        std::memset(dest, 0, destsz);
+        return GuestEinval;
+    }
     std::memcpy(dest, src, count);
     return 0;
 }

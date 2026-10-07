@@ -24,7 +24,7 @@
 static constexpr char SAVE_DIR[] = "_sd";
 
 static std::atomic<std::int32_t> g_transaction_counter{1};
-static bool g_initialized = false;
+static int g_initializations = 0;
 
 static std::string save_root() {
     return std::string(SAVE_DIR);
@@ -351,7 +351,7 @@ static int getSaveDataMemory2(SaveDataMemoryGet2* get_param) {
     if (get_param == nullptr) {
         return SAVE_DATA_ERROR_PARAMETER;
     }
-    if (!g_initialized) {
+    if (g_initializations == 0) {
         return SAVE_DATA_ERROR_NOT_INITIALIZED;
     }
     std::lock_guard<std::mutex> lk(g_mem_mutex);
@@ -393,10 +393,7 @@ int APS5_VABI sceSaveDataGetSaveDataMemory2(SaveDataMemoryGet2* get_param) {
 
 int APS5_VABI sceSaveDataInitialize3(const void* init) {
     (void)init;
-    if (g_initialized) {
-        return SAVE_DATA_ERROR_ALREADY_INITIALIZED;
-    }
-    g_initialized = true;
+    ++g_initializations;
     return SAVE_DATA_OK;
 }
 
@@ -536,7 +533,7 @@ static int setSaveDataMemory2(const SaveDataMemorySet2* set_param) {
     if (set_param == nullptr) {
         return SAVE_DATA_ERROR_PARAMETER;
     }
-    if (!g_initialized) {
+    if (g_initializations == 0) {
         return SAVE_DATA_ERROR_NOT_INITIALIZED;
     }
     std::lock_guard<std::mutex> lk(g_mem_mutex);
@@ -594,7 +591,7 @@ static int setupSaveDataMemory2(const SaveDataMemorySetup2* setup_param, SaveDat
     if (setup_param == nullptr) {
         return SAVE_DATA_ERROR_PARAMETER;
     }
-    if (!g_initialized) {
+    if (g_initializations == 0) {
         return SAVE_DATA_ERROR_NOT_INITIALIZED;
     }
     if (setup_param->memory_size == 0 || setup_param->memory_size > MEM_MAX_SIZE) {
@@ -654,13 +651,13 @@ int APS5_VABI sceSaveDataSyncSaveDataMemory(const void* sync_param) {
 }
 
 int APS5_VABI sceSaveDataTerminate(void) {
-    if (!g_initialized) {
+    if (g_initializations == 0) {
         return SAVE_DATA_ERROR_NOT_INITIALIZED;
     }
-    if (any_slot_used()) {
+    if (g_initializations == 1 && any_slot_used()) {
         return SAVE_DATA_ERROR_BUSY;
     }
-    g_initialized = false;
+    --g_initializations;
     return SAVE_DATA_OK;
 }
 

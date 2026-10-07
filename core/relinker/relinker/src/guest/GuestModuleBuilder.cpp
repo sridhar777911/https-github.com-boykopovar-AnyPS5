@@ -49,7 +49,7 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
     if (paths.empty()) return {};
     if (lazyBinding) throw Domain::RelinkerException("Guest modules require eager binding; --lazy-binding is incompatible");
     std::vector<GuestImage> images;
-    std::map<std::string, std::size_t> exports;
+    std::map<std::string, std::vector<std::size_t>> exports;
     std::map<std::string, std::set<std::size_t>> sharedExports;
     std::set<std::string> outputNames;
     Io::FileReader reader;
@@ -66,12 +66,11 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
         if (!outputNames.insert(folded).second) throw Domain::RelinkerException("Conflicting guest output filename: " + image.OutputName);
         for (const auto& symbol : image.Symbols) {
             if (symbol.Section == 0 || symbol.Section == AbsoluteSection || (symbol.Info >> 4) == 0 || symbol.Visibility == 1 || symbol.Visibility == 2) continue;
-            const auto [existing, inserted] = exports.emplace(symbol.Name, images.size());
-            if (inserted) continue;
-            if (windows || existing->second == images.size()) throw Domain::RelinkerException("Duplicate guest export after stripping #: " + symbol.Name + " in " + images.at(existing->second).SourcePath.string() + " and " + path.string());
-            auto& providers = sharedExports[symbol.Name];
-            providers.insert(existing->second);
-            providers.insert(images.size());
+            auto& providers = exports[symbol.Name];
+            const bool repeated = std::find(providers.begin(), providers.end(), images.size()) != providers.end();
+            if (!windows && repeated) throw Domain::RelinkerException("Duplicate guest export after stripping #: " + symbol.Name + " in " + path.string() + " and " + path.string());
+            if (!repeated) providers.push_back(images.size());
+            if (!windows && providers.size() > 1) sharedExports[symbol.Name].insert(providers.begin(), providers.end());
         }
         std::vector<Domain::ProgramHeader> codeHeaders;
         for (const auto& header : image.Headers) if (header.Type == 1 && (header.Flags & 1) != 0) codeHeaders.push_back(header);
@@ -119,7 +118,11 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
         if (!windows && exports.contains(name)) rename(dynamic.DynSymData, dynamic.DynStrData, offset / 24, name);
     }
     std::vector<std::set<std::size_t>> dependencies(images.size());
-    for (auto& image : images) image.UsePlatformTlsResolver = !exports.contains("vNe1w4diLCs");
+    for (auto& image : images) {
+        image.UsePlatformTlsResolver = !windows ? !exports.contains("vNe1w4diLCs") : std::none_of(image.Symbols.begin(), image.Symbols.end(), [](const auto& symbol) {
+            return symbol.Name == "vNe1w4diLCs" && symbol.Section != 0 && symbol.Section != AbsoluteSection && (symbol.Info >> 4) != 0 && symbol.Visibility != 1 && symbol.Visibility != 2;
+        });
+    }
     for (std::size_t index = 0; index < images.size(); ++index) {
         for (const auto& name : images[index].Dependencies) {
             const auto found = guestNames.find(name);
@@ -129,11 +132,19 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
             if (symbol.Section != 0 || symbol.Name.empty()) continue;
             rejectSharedImport(symbol.Name, images[index].SourcePath.string());
             const auto found = exports.find(symbol.Name);
+            std::vector<std::size_t> providers;
             if (found != exports.end()) {
-                const auto& provider = images[found->second];
+                for (const auto provider : found->second) {
+                    const auto& candidate = images[provider];
+                    if (!windows || symbol.Library.empty() || symbol.Library == candidate.SourcePath.filename().string() || symbol.Library == candidate.Soname) providers.push_back(provider);
+                }
+            }
+            if (providers.size() > 1) throw Domain::RelinkerException("Ambiguous guest import after stripping #: " + symbol.Name);
+            if (!providers.empty()) {
+                const auto& provider = images[providers.front()];
                 const auto exported = std::find_if(provider.Symbols.begin(), provider.Symbols.end(), [&](const auto& candidate) { return candidate.Section != 0 && candidate.Section != AbsoluteSection && candidate.Name == symbol.Name && (candidate.Info >> 4) != 0 && candidate.Visibility != 1 && candidate.Visibility != 2; });
                 if (exported == provider.Symbols.end() || ((symbol.Info & 15) != 0 && (symbol.Info & 15) != (exported->Info & 15))) throw Domain::RelinkerException("Guest import/export type mismatch: " + symbol.Name);
-                if (found->second != index) dependencies[index].insert(found->second);
+                if (providers.front() != index) dependencies[index].insert(providers.front());
             } else if (windows && (symbol.Info & 15) == 6) throw Domain::RelinkerException("Windows guest TLS import requires a guest TLS export: " + symbol.Name);
         }
     }
@@ -202,6 +213,7 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
         Domain::GuestRuntime runtime;
         runtime.UsePlatformTlsResolver = image.UsePlatformTlsResolver;
         runtime.Path = relativeDirectory + "/" + image.OutputName;
+        runtime.Names = {image.SourcePath.filename().string(), image.Soname};
         std::vector<std::uint8_t> output;
         if (windows) output = Elfpatcher::GuestModuleWriter().WriteWindows(image, runtime);
         else {

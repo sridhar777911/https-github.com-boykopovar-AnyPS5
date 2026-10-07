@@ -1,23 +1,5 @@
-add_library(libSceNgs2.native SHARED EXCLUDE_FROM_ALL
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/Atrac9.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/Custom.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/Rack.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/Render.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/System.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/Unimplemented.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/Voice.cpp
-)
-target_include_directories(libSceNgs2.native PRIVATE ${LIBS_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/3rdparty/LibAtrac9/C/src)
-target_link_libraries(libSceNgs2.native PRIVATE atrac9)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_options(libSceNgs2.native PRIVATE LINKER:--exclude-libs,ALL)
-endif()
-set_target_properties(libSceNgs2.native PROPERTIES
-        CXX_EXTENSIONS OFF
-        CXX_VISIBILITY_PRESET hidden
-        VISIBILITY_INLINES_HIDDEN ON
-)
-configure_windows_unwind(libSceNgs2.native)
+include(${CMAKE_CURRENT_SOURCE_DIR}/Ngs2Library.cmake)
+add_sce_ngs2_library(libSceNgs2.native)
 
 if(MINGW)
     foreach(runtimeLinkFlag IN ITEMS -static-libgcc -static-libstdc++ -static)

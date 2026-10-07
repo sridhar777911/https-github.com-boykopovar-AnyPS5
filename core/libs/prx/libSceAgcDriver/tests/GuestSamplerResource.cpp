@@ -189,9 +189,28 @@ void RunGuestSamplerResourceTests() {
     badBlendZero.blendZeroPrt = true;
     rejectFields(badBlendZero, "PRT blend-zero");
 
-    Fields badBorder = base;
-    badBorder.borderColorType = 3;
-    rejectFields(badBorder, "border color table");
+    Fields unusedTable = base;
+    unusedTable.borderColorType = 3;
+    const auto unread = DecodeSamplerResource(pack(unusedTable));
+    Require(unread.addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE && unread.addressModeV == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE && unread.addressModeW == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        "a table border colour with clamp-to-edge addressing must decode");
+    for (std::uint32_t mode : {0u, 1u, 2u, 3u}) {
+        Fields unreadMode = base;
+        unreadMode.borderColorType = 3;
+        unreadMode.clampX = mode;
+        DecodeSamplerResource(pack(unreadMode));
+    }
+    for (std::uint32_t mode : {4u, 5u, 6u, 7u}) {
+        for (int axis = 0; axis < 3; ++axis) {
+            Fields readTable = base;
+            readTable.borderColorType = 3;
+            (axis == 0 ? readTable.clampX : axis == 1 ? readTable.clampY : readTable.clampZ) = mode;
+            rejectFields(readTable, "border color table");
+        }
+    }
+    const std::array<std::uint32_t, 4> capturedTable{0x00007092u, 0x00fff000u, 0x05000000u, 0xc0000000u};
+    const auto capturedUnread = DecodeSamplerResource(capturedTable);
+    Require(capturedUnread.addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE && capturedUnread.addressModeW == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, "captured table-border sampler decoded incorrectly");
 
     Fields opaqueBlack = base;
     opaqueBlack.borderColorType = 1;

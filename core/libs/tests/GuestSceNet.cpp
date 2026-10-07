@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 #include <thread>
 
 extern "C" {
@@ -36,8 +37,89 @@ const char* APS5_VABI sceNetInetNtop(int, const void*, char*, std::uint32_t);
 int* APS5_VABI sceNetErrnoLoc(void);
 }
 
+struct NetIovec {
+    void* base;
+    std::uint64_t length;
+};
+
+struct NetMsghdr {
+    void* name;
+    std::uint32_t name_length;
+    NetIovec* iov;
+    int iov_length;
+    void* control;
+    std::uint32_t control_length;
+    int flags;
+};
+
+extern "C" {
+std::int64_t APS5_VABI sceNetSendmsg(int, const NetMsghdr*, int);
+std::int64_t APS5_VABI sceNetRecvmsg(int, NetMsghdr*, int);
+}
+
 static void Require(bool condition) {
     if (!condition) std::abort();
+}
+
+static bool Failed(std::int64_t result, int error) {
+    return result == static_cast<int>(0x80410100u | static_cast<unsigned>(error)) && *sceNetErrnoLoc() == error;
+}
+
+static void CheckMessages(int receiver, int sender, const std::array<std::uint8_t, 16>& address) {
+    char head[] = "scatter ";
+    char tail[] = "gather";
+    NetIovec out[] = {{head, 8}, {nullptr, 0}, {tail, 6}};
+    std::array<std::uint8_t, 16> destination = address;
+    NetMsghdr send{destination.data(), 16, out, 3, nullptr, 0, 0};
+    Require(sceNetSendmsg(sender, &send, 0) == 14);
+
+    char first[5]{};
+    char second[20]{};
+    NetIovec in[] = {{first, sizeof(first)}, {second, sizeof(second)}};
+    std::array<std::uint8_t, 28> source{};
+    char control[16]{};
+    NetMsghdr receive{source.data(), static_cast<std::uint32_t>(source.size()), in, 2, control, sizeof(control), -1};
+    Require(sceNetRecvmsg(receiver, &receive, 2) == 14);
+    Require(std::memcmp(first, "scatt", 5) == 0 && std::memcmp(second, "er gather", 9) == 0);
+    Require(receive.flags == 0 && receive.control_length == 0 && receive.name_length == 16);
+    Require(source[0] == 16 && source[1] == 2 && source[4] == 127 && source[7] == 1);
+    std::memset(second, 0, sizeof(second));
+    receive.iov_length = 1;
+    receive.flags = -1;
+    Require(sceNetRecvmsg(receiver, &receive, 0) == 5);
+    Require(receive.flags == 0x10 && std::memcmp(first, "scatt", 5) == 0 && second[0] == 0);
+
+    NetMsghdr bad = send;
+    Require(Failed(sceNetSendmsg(sender, nullptr, 0), 14));
+    Require(Failed(sceNetRecvmsg(receiver, nullptr, 0), 14));
+    bad.iov_length = -1;
+    Require(Failed(sceNetSendmsg(sender, &bad, 0), 40));
+    bad.iov_length = 1025;
+    Require(Failed(sceNetRecvmsg(receiver, &bad, 0), 40));
+    bad.iov_length = 1;
+    bad.iov = nullptr;
+    Require(Failed(sceNetSendmsg(sender, &bad, 0), 14));
+    NetIovec hole[] = {{nullptr, 1}};
+    bad.iov = hole;
+    Require(Failed(sceNetRecvmsg(receiver, &bad, 0), 14));
+    NetIovec huge[] = {{head, 0x7fffffff}, {tail, 1}};
+    bad.iov = huge;
+    bad.iov_length = 2;
+    Require(Failed(sceNetSendmsg(sender, &bad, 0), 22));
+    Require(Failed(sceNetRecvmsg(receiver, &receive, 1), 45));
+    Require(Failed(sceNetSendmsg(sender, &send, 1), 45));
+    Require(Failed(sceNetRecvmsg(12345, &receive, 0), 9));
+    Require(Failed(sceNetSendmsg(12345, &send, 0), 9));
+    NetMsghdr with_control = send;
+    with_control.control = control;
+    with_control.control_length = sizeof(control);
+    bool threw = false;
+    try {
+        sceNetSendmsg(sender, &with_control, 0);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    Require(threw);
 }
 
 static void CheckAddressText(int family, const char* text) {
@@ -103,6 +185,16 @@ int main() {
     Require(ready_count == 1 && (ready.events & 1) && ready.ident == static_cast<std::uint64_t>(accepted));
     Require(sceNetRecv(accepted, response, sizeof(response), 0) == sizeof(response));
     Require(std::strcmp(request, response) == 0);
+    char reply[] = "stream reply";
+    NetIovec reply_out[] = {{reply, 7}, {reply + 7, sizeof(reply) - 7}};
+    NetMsghdr reply_send{nullptr, 0, reply_out, 2, nullptr, 0, 0};
+    Require(sceNetSendmsg(accepted, &reply_send, 0) == sizeof(reply));
+    char reply_result[sizeof(reply)]{};
+    NetIovec reply_in[] = {{reply_result, sizeof(reply_result)}};
+    std::array<std::uint8_t, 16> reply_name{};
+    NetMsghdr reply_receive{reply_name.data(), 16, reply_in, 1, nullptr, 0, -1};
+    Require(sceNetRecvmsg(client, &reply_receive, 0) == sizeof(reply));
+    Require(std::strcmp(reply, reply_result) == 0 && reply_receive.flags == 0 && reply_receive.name_length == 0);
     Require(sceNetEpollDestroy(epoll) == 0);
     Require(sceNetSocketClose(accepted) == 0);
     bool send_failed = false;
@@ -130,6 +222,7 @@ int main() {
     Require(sceNetRecvfrom(udp_receiver, datagram_result, sizeof(datagram_result), 0,
         source.data(), &address_size) == sizeof(datagram_result));
     Require(std::strcmp(datagram, datagram_result) == 0 && source[1] == 2);
+    CheckMessages(udp_receiver, udp_sender, address);
     Require(sceNetSocketClose(udp_sender) == 0);
     Require(sceNetSocketClose(udp_receiver) == 0);
 

@@ -108,6 +108,13 @@ void stateTests() {
     queue.context[0x103] = 5;
     Require(AgcDriver::Graphics::DrawRejection(queue, true).find("all ones") != std::string::npos, "a restart index other than all ones was accepted");
     queue = makeState();
+    queue.context[0x293] = 0x06020000u;
+    (void)AgcDriver::Graphics::DecodeState(queue);
+    Require(AgcDriver::Graphics::DrawRejection(queue, false).find("sample iteration") == std::string::npos, "per-engine primitive discard was rejected");
+    queue.context[0x293] = 0x06030000u;
+    Require(AgcDriver::Graphics::DrawRejection(queue, false).find("sample iteration") != std::string::npos, "per-sample shading was accepted");
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "sample iteration");
+    queue = makeState();
     queue.userConfig.erase(0x24b);
     queue.context[0x2a5] = 0;
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "user-config bank at DWORD 0x24b");

@@ -11,14 +11,19 @@
 #include <string>
 
 extern "C" std::uint32_t* APS5_VABI sceAgcDcbResetQueue(CommandBuffer* buf, std::uint32_t op, std::uint32_t state);
+extern "C" std::uint32_t* APS5_VABI sceAgcDcbClearState(CommandBuffer* buf, std::uint32_t command);
 extern "C" std::uint32_t* APS5_VABI sceAgcDcbSetFlip(CommandBuffer* buf, std::uint32_t handle, std::int32_t index, std::uint32_t mode, std::int64_t argument);
 extern "C" int APS5_VABI sceAgcSuspendPoint();
 extern "C" int APS5_VABI sceAgcInit(std::uint32_t version);
+extern "C" void* APS5_VABI sceAgcGetRegisterDefaults();
+extern "C" void* APS5_VABI sceAgcGetRegisterDefaultsInternal();
+extern "C" void* APS5_VABI sceAgcGetRegisterDefaults2Internal(std::uint32_t version);
 extern "C" int APS5_VABI sceAgcUnknownInitState(std::uint32_t* state, std::uint32_t version);
 extern "C" std::uint32_t* APS5_VABI sceAgcDcbDrawIndexAuto(CommandBuffer* buf, std::uint32_t indexCount, std::uint64_t modifier);
 extern "C" std::uint32_t* APS5_VABI sceAgcDcbDrawIndexIndirect(CommandBuffer* buf, std::uint32_t dataOffsetInBytes, std::uint64_t modifier);
 extern "C" std::uint32_t* APS5_VABI sceAgcDcbDrawIndexIndirectMulti(CommandBuffer* buf, std::uint32_t dataOffsetInBytes, std::uint32_t countIndirect, std::uint32_t maxCountOrCount, const volatile void* countAddress, std::uint32_t strideInBytes, std::uint64_t modifier);
 extern "C" int APS5_VABI sceAgcWaitRegMemPatchReference(std::uint32_t* cmd, std::uint64_t reference);
+extern "C" int APS5_VABI sceAgcWaitRegMemPatchMask(std::uint32_t* cmd, std::uint64_t mask);
 extern "C" int APS5_VABI sceAgcGetDataPacketPayloadAddressUnk(std::uint32_t** addr, std::uint32_t* cmd, int type);
 extern "C" std::uint32_t* APS5_VABI sceAgcCbSetShRegisterRangeDirect(CommandBuffer* buf, std::uint32_t offset, const std::uint32_t* values, std::uint32_t numValues);
 extern "C" std::uint32_t* APS5_VABI sceAgcDcbContextStateAnotherOp(CommandBuffer* buf, std::uint32_t operation);
@@ -96,6 +101,21 @@ void testPackets() {
     exhausted.buffer.cursor_down = exhausted.words.data() + 2;
     expectFailure([&] { Agc::Command::WriteNop(&exhausted.buffer, 3, __func__); });
     check(exhausted.buffer.cursor_up == exhausted.words.data(), "failed allocation advanced cursor");
+}
+
+void testClearState() {
+    Storage storage;
+    storage.words.fill(0xdeadbeefu);
+    for (std::uint32_t command = 0; command <= 0xfu; ++command) {
+        auto* packet = sceAgcDcbClearState(&storage.buffer, command);
+        check(packet == storage.words.data() + command * 2 && packet[0] == 0xc0001200u && packet[1] == command, "incorrect CLEAR_STATE packet");
+    }
+    check(storage.buffer.cursor_up == storage.words.data() + 32 && storage.words[32] == 0xdeadbeefu, "incorrect CLEAR_STATE cursor advance");
+    const auto before = storage.words;
+    expectFailure([&] { sceAgcDcbClearState(&storage.buffer, 0x10u); });
+    expectFailure([&] { sceAgcDcbClearState(&storage.buffer, 0xffffffffu); });
+    expectFailure([] { sceAgcDcbClearState(nullptr, 0); });
+    check(storage.words == before && storage.buffer.cursor_up == storage.words.data() + 32, "invalid CLEAR_STATE modified the buffer");
 }
 
 struct ContextGrowth {
@@ -331,8 +351,18 @@ void testMemory() {
     check(packet[8] == 7 && packet[9] == 0x11223344u, "reference patch changed the high word");
     const auto before = storage.words;
     expectFailure([&] { sceAgcWaitRegMemPatchReference(packet, 0x100000000ull); });
-    expectFailure([&] { Agc::Command::WriteWait(&storage.buffer, 0, 3, 0, 0, &value, 0x100000000ull, 0, 32, __func__); });
     check(storage.words == before, "invalid memory operation modified packet memory");
+    auto* truncated = Agc::Command::WriteWait(&storage.buffer, 0, 3, 0, 0, &value, 0x100000000ull, 0xffffffff00000001ull, 32, __func__);
+    check(truncated[8] == 0u && truncated[9] == 1u, "32-bit wait did not keep the low halves of the reference and mask");
+    sceAgcWaitRegMemPatchMask(packet, 0x0f0f0f0fu);
+    check(packet[10] == 0x0f0f0f0fu && packet[11] == 0xffffffffu && packet[8] == 7, "64-bit mask patch changed the wrong word");
+    sceAgcWaitRegMemPatchMask(truncated, 0xff00u);
+    check(truncated[9] == 0xff00u && truncated[8] == 0u && truncated[10] == 2u, "32-bit mask patch changed the wrong word");
+    const auto beforeMask = storage.words;
+    expectFailure([&] { sceAgcWaitRegMemPatchMask(packet, 0x100000000ull); });
+    expectFailure([&] { sceAgcWaitRegMemPatchMask(truncated, 0x100000000ull); });
+    expectFailure([&] { sceAgcWaitRegMemPatchMask(packet + 4, 1); });
+    check(storage.words == beforeMask, "invalid mask patch modified packet memory");
 }
 
 void testDefaults() {
@@ -350,6 +380,9 @@ void testDefaults() {
             check(first != nullptr && first == Agc::Command::GetRegisterDefaults(version, internal, __func__), "unstable register defaults pointer");
         }
     }
+    auto* internalDefaults = sceAgcGetRegisterDefaultsInternal();
+    check(internalDefaults != nullptr && internalDefaults == Agc::Command::GetRegisterDefaults(0, true, __func__) && internalDefaults == sceAgcGetRegisterDefaults2Internal(0), "internal register defaults are not the baseline internal table");
+    check(internalDefaults != sceAgcGetRegisterDefaults(), "internal register defaults returned the public table");
     expectFailure([] { Agc::Command::GetRegisterDefaults(14, false, __func__); });
     expectFailure([] { Agc::Command::GetRegisterDefaults(0xffffffffu, true, __func__); });
 }
@@ -365,6 +398,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         testPackets();
+        testClearState();
         testIndexedIndirectDraws();
         testMarkers();
         testIndexBuffer();

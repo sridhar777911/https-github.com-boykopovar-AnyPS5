@@ -12,7 +12,7 @@ def main():
     cases = [
         ("program-header-offset", 0x20, "FileByteOffset out of bounds (offset 0xffffffffffffffff)"),
         ("load-offset", 64 + 8, "Segment offset out of bounds (offset 0xffffffffffffffff)"),
-        ("dynamic-offset", 120 + 8, "FileByteOffset out of bounds (offset 0xffffffffffffffff)"),
+        ("dynamic-offset", 120 + 8, "Dynamic segment out of bounds (offset 0xffffffffffffffff)"),
     ]
     with tempfile.TemporaryDirectory(prefix="anyps5-elf-offsets-") as directory:
         for name, field, error in cases:

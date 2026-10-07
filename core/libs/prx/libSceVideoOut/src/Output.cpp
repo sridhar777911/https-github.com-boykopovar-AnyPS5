@@ -25,9 +25,6 @@ static int validateOutputConfig(int handle, uint64_t mode, const VideoOutOutputO
             }
         }
     }
-    if (mode != VIDEO_OUT_OUTPUT_MODE_DEFAULT && mode != VIDEO_OUT_OUTPUT_MODE_119_88HZ) {
-        throw std::runtime_error(std::string(__func__) + ": VIDEO_OUT_ERROR_UNSUPPORTED_OUTPUT_MODE");
-    }
     return 0;
 }
 
@@ -199,7 +196,7 @@ int APS5_VABI sceVideoOutIsOutputSupported(int handle, uint64_t mode, const Vide
     if (result != 0) {
         return result;
     }
-    return (mode == VIDEO_OUT_OUTPUT_MODE_119_88HZ) ? 0 : 1;
+    return mode == VIDEO_OUT_OUTPUT_MODE_DEFAULT ? 1 : 0;
 } catch (const ProcessShutdown&) {
     LibcAwaitExit_nid_postfix();
 }
@@ -209,8 +206,8 @@ int APS5_VABI sceVideoOutConfigureOutput(int handle, uint64_t mode, const VideoO
     if (supported < 0) {
         return supported;
     }
-    if (supported == 0 && mode == VIDEO_OUT_OUTPUT_MODE_119_88HZ) {
-        throw std::runtime_error(std::string(__func__) + ": VIDEO_OUT_ERROR_UNAVAILABLE_OUTPUT_MODE");
+    if (supported == 0) {
+        return VIDEO_OUT_ERROR_UNAVAILABLE_OUTPUT_MODE;
     }
     auto cfg = VideoOutDriver::Get().GetConfig(handle);
     if (cfg == nullptr) {

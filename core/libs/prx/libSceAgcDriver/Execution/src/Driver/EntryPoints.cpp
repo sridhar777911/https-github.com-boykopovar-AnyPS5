@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
+#include <mutex>
 
 namespace AgcDriver {
 
@@ -54,6 +55,19 @@ extern "C" void AgcDriverWaitIdle_nid_postfix() try {
     AgcDriver::WaitIdle();
 } catch (const ProcessShutdown&) {
     LibcAwaitExit_nid_postfix();
+}
+
+static std::mutex& VulkanLoaderMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+extern "C" void AgcDriverLockVulkanLoader_nid_postfix() {
+    VulkanLoaderMutex().lock();
+}
+
+extern "C" void AgcDriverUnlockVulkanLoader_nid_postfix() {
+    VulkanLoaderMutex().unlock();
 }
 
 extern "C" void AgcDriverShutdown_nid_postfix() {
