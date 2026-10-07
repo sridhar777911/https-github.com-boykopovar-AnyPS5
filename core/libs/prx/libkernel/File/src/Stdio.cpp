@@ -576,6 +576,12 @@ int APS5_VABI sceKernelRename(const char* from, const char* to) {
     return 0;
 }
 
+int APS5_VABI rename_nid_postfix(const char* from, const char* to) {
+    if (const int error = PathError(from)) return PosixFailure(error);
+    if (const int error = PathError(to)) return PosixFailure(error);
+    return PosixResult(sceKernelRename(from, to));
+}
+
 int APS5_VABI sceKernelRmdir(const char* path) {
     if (path == nullptr) throw std::invalid_argument("sceKernelRmdir: path is null");
     const auto native = ResolvePath_nid_no_patch(path);
