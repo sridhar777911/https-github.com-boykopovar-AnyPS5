@@ -7,6 +7,7 @@
 #include <optional>
 #include <cerrno>
 #include <cstring>
+#include <algorithm>
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/GuestHeap.hpp"
 
@@ -56,6 +57,41 @@ struct WorkingDirectory {
     std::filesystem::path current = root;
 };
 WorkingDirectory& Directories() { static WorkingDirectory state; return state; }
+#ifdef __linux__
+std::string FoldCase(const std::string& text) {
+    std::string folded(text);
+    std::transform(folded.begin(), folded.end(), folded.begin(), [](unsigned char character) {
+        return static_cast<char>(character >= 'A' && character <= 'Z' ? character + ('a' - 'A') : character);
+    });
+    return folded;
+}
+
+std::filesystem::path MatchHostCase(const std::filesystem::path& base, const std::filesystem::path& relative) {
+    auto result = base;
+    auto component = relative.begin();
+    for (; component != relative.end(); ++component) {
+        std::error_code error;
+        if (std::filesystem::exists(result / *component, error)) {
+            result /= *component;
+            continue;
+        }
+        const auto wanted = FoldCase(component->string());
+        std::filesystem::path match;
+        bool ambiguous = false;
+        for (std::filesystem::directory_iterator it(result, error), end; !error && it != end; it.increment(error)) {
+            if (FoldCase(it->path().filename().string()) != wanted) continue;
+            ambiguous = !match.empty();
+            match = it->path().filename();
+            if (ambiguous) break;
+        }
+        if (match.empty() || ambiguous) break;
+        result /= match;
+    }
+    for (; component != relative.end(); ++component) result /= *component;
+    return result;
+}
+#endif
+
 std::filesystem::path Resolve(WorkingDirectory& state, const char* path) {
     std::string text(path);
     for (auto& character : text) if (character == '\\') character = '/';
@@ -67,7 +103,11 @@ std::filesystem::path Resolve(WorkingDirectory& state, const char* path) {
     auto guest = (std::filesystem::path("/") / state.current.lexically_relative(state.root));
     guest = (input.is_absolute() ? input : guest / input).lexically_normal();
     if (auto aliased = ResolveAlias(guest.relative_path().generic_string())) return *aliased;
+#ifdef __linux__
+    return MatchHostCase(state.root, guest.relative_path()).make_preferred();
+#else
     return (state.root / guest.relative_path()).make_preferred();
+#endif
 }
 int DirectoryFailure(const std::error_code& error) {
     if (error == std::errc::permission_denied) return 13;
