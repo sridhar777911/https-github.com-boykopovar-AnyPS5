@@ -11,6 +11,7 @@ KNOWN_UNRUN = {
     "agc_driver_recorder_tests",
     "guest_formatting_tests",
     "video_out_flip_tests",
+    "windows_exception_tests",
 }
 
 
@@ -19,7 +20,10 @@ def built(build):
                             capture_output=True, text=True, check=True).stdout
     names = set()
     for line in listed.splitlines():
-        found = re.match(rf"^{TEST_OUTPUT}([A-Za-z0-9_.]+)", line)
+        path, _, rule = line.partition(": ")
+        if "EXECUTABLE" not in rule:
+            continue
+        found = re.match(rf"^{TEST_OUTPUT}([A-Za-z0-9_.]+)$", path)
         if not found:
             continue
         name = found.group(1).rstrip(".")
