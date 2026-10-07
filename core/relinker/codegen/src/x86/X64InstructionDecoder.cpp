@@ -274,7 +274,7 @@ std::size_t X64InstructionDecoder::Decode(const std::uint8_t* data, std::size_t 
     const auto reg = static_cast<std::uint8_t>((modrm >> ModRmRegShift) & ModRmRegMask);
     const auto rm = static_cast<std::uint8_t>(modrm & ModRmRmMask);
 
-    if (!vexPresent && !twoByteOpcode &&
+    if (!vexPresent && !evexPresent && !twoByteOpcode &&
         (opcode == OneByteTestGrp3Rm8 || opcode == OneByteTestGrp3Rm) &&
         reg <= Grp3RegTestMax) {
         immediateSize = (opcode == OneByteTestGrp3Rm8)
