@@ -166,7 +166,10 @@ GuestTextureResource DecodeTextureResource(std::span<const std::uint32_t> words)
         case TextureDimension::kCube:
             Require(width == height, "guest cube texture descriptor is not square");
             Require(baseArray <= depth, "guest cube texture descriptor has a base array past its last array slice");
-            Require((depth - baseArray + 1u) % 6u == 0, "guest cube texture descriptor does not contain a multiple of 6 array slices");
+            if ((depth - baseArray + 1u) % 6u != 0) {
+                Require(false, "guest cube texture descriptor does not contain a multiple of 6 array slices" +
+                    describe() + " (base array " + std::to_string(baseArray) + ")");
+            }
             break;
     }
 
