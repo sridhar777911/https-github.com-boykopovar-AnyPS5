@@ -3,10 +3,33 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Shaders/ShaderRegistry.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Pm4.hpp"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
 namespace AgcDriver::DriverDetail {
+
+std::shared_ptr<DispatchVariant> DrawStageVariant(const StageCapture& capture, const std::shared_ptr<const ShaderSnapshot>& shader, const std::optional<ShaderRecompiler::ShaderVertexStageInfo>& vertexInfo, std::span<const Graphics::DecodeRead> decodeReads) {
+    if (capture.compiled == nullptr || !CacheableResult(*capture.compiled)) return nullptr;
+    auto variant = std::make_shared<DispatchVariant>();
+    variant->compiled = capture.compiled;
+    variant->shader = shader;
+    variant->forgetSerial = capture.forgetSerial;
+    variant->pushOffset = capture.pushOffset;
+    if (vertexInfo) variant->vertexInfo = std::make_shared<const ShaderRecompiler::ShaderVertexStageInfo>(*vertexInfo);
+
+    std::vector<ShaderRecompiler::MemoryRegion> regions(capture.regions.begin(), capture.regions.end());
+    for (const auto& read : decodeReads) regions.push_back({read.address, std::as_bytes(std::span(read.bytes))});
+    std::stable_sort(regions.begin(), regions.end(), [](const ShaderRecompiler::MemoryRegion& a, const ShaderRecompiler::MemoryRegion& b) { return a.guestAddress < b.guestAddress; });
+    for (const auto& region : regions) {
+        variant->runs.emplace_back(region.guestAddress, region.guestAddress + region.bytes.size());
+        const auto count = region.bytes.size() / sizeof(std::uint32_t);
+        const auto offset = variant->words.size();
+        variant->words.resize(offset + count);
+        std::memcpy(variant->words.data() + offset, region.bytes.data(), count * sizeof(std::uint32_t));
+    }
+    return variant;
+}
 
 ShaderRecompiler::RecompileResult Driver::compileDrawStage(std::size_t i, std::uint32_t pushOffset, const QueueState& queue, const Submission& submission, const std::vector<DrawProgram>& programs, const Graphics::State& graphics, const ShaderRecompiler::ShaderPixelStageInfo& pixel, const std::vector<std::optional<ShaderRecompiler::ShaderVertexStageInfo>>& vertexInfos, std::vector<ShaderRecompiler::MemoryRegion>& memory, const std::vector<ShaderRecompiler::LinkedProgram>& linked, const Pm4::DrawParameters& drawParameters, const std::shared_ptr<VulkanDevice>& localDevice, ShaderMemory& shaderMemory, std::vector<StageCapture>& stageCaptures, std::vector<bool>& recompiled, bool drawHit, const std::vector<std::shared_ptr<DispatchVariant>>& matched, const std::vector<std::vector<ShaderRecompiler::MemoryRegion>>& matchedRegions, bool profile, std::uint64_t dumpTarget, std::uint64_t dumpSlot1, std::uint64_t& captures, DrawPhaseTiming& phaseTiming, std::array<double, DrawDriverPhaseCount>& phaseMs, std::string& rejected) {
     using Stage = ShaderRecompiler::ShaderStage;
@@ -88,24 +111,8 @@ void Driver::cacheDrawStages(bool useDrawEntries, bool drawHit, const Pm4::DrawP
         std::uint64_t unstable = 0, mismatches = 0;
         for (std::size_t i = 0; i < programs.size(); ++i) {
             const auto& stageCapture = stageCaptures[i];
-            if (stageCapture.compiled == nullptr) continue;
-            auto variant = std::make_shared<DispatchVariant>();
-            variant->compiled = stageCapture.compiled;
-            variant->shader = programs[i].snapshot;
-            variant->forgetSerial = stageCapture.forgetSerial;
-            variant->pushOffset = stageCapture.pushOffset;
-            if (vertexInfos[i]) variant->vertexInfo = std::make_shared<const ShaderRecompiler::ShaderVertexStageInfo>(*vertexInfos[i]);
-
-            std::vector<ShaderRecompiler::MemoryRegion> regions(stageCapture.regions.begin(), stageCapture.regions.end());
-            for (const auto& read : decodeReads[i]) regions.push_back({read.address, std::as_bytes(std::span(read.bytes))});
-            std::stable_sort(regions.begin(), regions.end(), [](const ShaderRecompiler::MemoryRegion& a, const ShaderRecompiler::MemoryRegion& b) { return a.guestAddress < b.guestAddress; });
-            for (const auto& region : regions) {
-                variant->runs.emplace_back(region.guestAddress, region.guestAddress + region.bytes.size());
-                const auto count = region.bytes.size() / sizeof(std::uint32_t);
-                const auto offset = variant->words.size();
-                variant->words.resize(offset + count);
-                std::memcpy(variant->words.data() + offset, region.bytes.data(), count * sizeof(std::uint32_t));
-            }
+            auto variant = DrawStageVariant(stageCapture, programs[i].snapshot, vertexInfos[i], decodeReads[i]);
+            if (variant == nullptr) continue;
             if (verifyHit && matched[i] != nullptr && (matched[i]->runs != variant->runs || matched[i]->words != variant->words)) {
                 ++mismatches;
                 static std::atomic<std::uint64_t> reports{0};

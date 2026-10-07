@@ -3,6 +3,7 @@
 
 #include "prx/libSceAgcDriver/Execution/include/Driver/Dispatch/DispatchCache.hpp"
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/ShaderInputState.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -10,6 +11,8 @@
 #include <cstdint>
 #include <list>
 #include <memory>
+#include <optional>
+#include <span>
 #include <vector>
 
 namespace AgcDriver::DriverDetail {
@@ -71,6 +74,8 @@ struct StageCapture {
     std::uint64_t forgetSerial = 0;
     std::uint32_t pushOffset = 0;
 };
+
+std::shared_ptr<DispatchVariant> DrawStageVariant(const StageCapture& capture, const std::shared_ptr<const ShaderSnapshot>& shader, const std::optional<ShaderRecompiler::ShaderVertexStageInfo>& vertexInfo, std::span<const Graphics::DecodeRead> decodeReads);
 
 }
 

@@ -201,6 +201,35 @@ bool ShaderMemory::read(void* context, std::uint64_t address, std::uint32_t* val
     return true;
 }
 
+bool ShaderMemory::accessible(void* context, std::uint64_t address, std::uint64_t bytes) {
+    auto& self = *static_cast<ShaderMemory*>(context);
+    if (bytes == 0 || address > std::numeric_limits<std::uint64_t>::max() - bytes) return false;
+    const auto end = address + bytes;
+    while (address < end) {
+        const auto next = self.initial.upper_bound(address);
+        if (next != self.initial.begin()) {
+            const auto previous = std::prev(next);
+            if (address - previous->first < previous->second.size()) {
+                address = previous->first + previous->second.size();
+                continue;
+            }
+        }
+        const auto base = address & ~static_cast<std::uint64_t>(PageBytes - 1);
+        const auto pageEnd = std::min<std::uint64_t>(base + PageBytes, end);
+        const auto& page = self.page(base);
+        if (!page.wordwise && !page.valid.all() && !GuestMemory::Accessible(reinterpret_cast<const void*>(address), static_cast<std::size_t>(pageEnd - address))) return false;
+        address = pageEnd;
+    }
+    return true;
+}
+
+bool ShaderMemory::pending(void* context, std::uint64_t address, std::uint64_t bytes) {
+    const auto& self = *static_cast<const ShaderMemory*>(context);
+    if (self.pendingWrite == nullptr || bytes == 0) return false;
+    const auto policy = self.pendingWrite(address, static_cast<std::size_t>(bytes), {});
+    return policy == PendingWrite::Sync || policy == PendingWrite::VerifyRaw || policy == PendingWrite::VerifyKnownValue;
+}
+
 ShaderMemory::KnownValueCounts ShaderMemory::KnownValues() {
     auto& totals = CaptureTotals();
     return {totals.wordsKnown.load(std::memory_order_relaxed), totals.wordsKnownVerified.load(std::memory_order_relaxed), totals.wordsKnownMismatches.load(std::memory_order_relaxed)};
@@ -225,6 +254,8 @@ std::shared_ptr<const ShaderRecompiler::ResourceCapture> ShaderMemory::Capture(c
     runtime.userContext = this;
     runtime.readMemory = &read;
     runtime.readSpecializationMemory = &read;
+    runtime.accessible = &accessible;
+    runtime.pendingWrite = &pending;
     auto capture = handle != nullptr ? ShaderRecompiler::CaptureResources(request, runtime, *handle) : ShaderRecompiler::CaptureResources(request, runtime);
     if (profile) {
         totals.captureNanoseconds += NanosecondsSince(started);
