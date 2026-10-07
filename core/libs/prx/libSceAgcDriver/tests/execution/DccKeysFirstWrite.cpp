@@ -268,6 +268,18 @@ void Run(AgcDriver::VulkanDevice& device, std::uint8_t* block) {
     StorageTexture::FlushPending(surface, SurfaceBytes, nullptr, "test");
     device.WaitIdle();
     requireTexels("a first write followed by a kernel's 0000 store over half the keys");
+    fillKeys(0x00, DccKeys::Clear0000);
+    image->Refresh();
+    Require(image->UploadedKeys() == DccKeys::Clear0000 && image->FilledKeys() == DccKeys::Uncompressed, "the refresh after a 0000 key fill did not clear the image");
+    std::memset(copied, 0xaa, KeyBytes);
+    fillKeys(0x40, DccKeys::Clear0001);
+    Dispatch(device, ClearKeysCode, clearData);
+    Dispatch(device, WriteCode, writeData);
+    Dispatch(device, CopyKeysCode, copyData);
+    RequireKeys(copied, 0xff, "a kernel reading the keys after a 0001 key fill, a kernel's 0000 store over them and a write");
+    StorageTexture::FlushPending(surface, SurfaceBytes, nullptr, "test");
+    device.WaitIdle();
+    requireTexels("a write after a 0001 key fill and a kernel's 0000 store over the keys");
     const auto fill = [&](std::size_t offset, std::size_t bytes, std::uint8_t key) {
         const std::uint32_t word = key * 0x01010101u;
         const std::array<std::uint32_t, 4> pattern{word, word, word, word};
