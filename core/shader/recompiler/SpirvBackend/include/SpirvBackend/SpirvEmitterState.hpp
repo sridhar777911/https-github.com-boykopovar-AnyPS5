@@ -70,6 +70,18 @@ struct MemoryResourceAccess {
     std::uint32_t memoryAccess = 0;
 };
 
+struct SpirvScalarBufferDword {
+    std::uint32_t byte = 0;
+    std::uint32_t inRange = 0;
+};
+
+struct SpirvTableImageVariable {
+    IrTextureNumericClass numericClass = IrTextureNumericClass::Unsupported;
+    RdnaImageDimension dimension = RdnaImageDimension::Unknown;
+    bool depthCompare = false;
+    std::uint32_t variable = 0;
+};
+
 struct SpirvEmitterState {
     SpirvEmitterState(const IrProgram& program, const ShaderStageInputInfo& inputInfo);
 
@@ -87,13 +99,11 @@ struct SpirvEmitterState {
     std::unordered_set<const IrValue*> sharedLaneValues;
     std::uint32_t laneHalf = 0;
     // The target's SPIR-V version and what the device accepts, for capabilities an emitter adds
-    // only when needed (bindless image tables: see TableImageIndex).
+    // only when needed (image tables).
     std::uint32_t spirvVersion = 0x00010300u;
     std::span<const std::uint32_t> supportedCapabilities;
     std::span<const std::string_view> supportedExtensions;
     bool nonConstantImageOffsets = false;
-    // A bindless table's runtime slot is wave-uniform; it is uniform over the invocation group
-    // only for a single-wave compute workgroup, elsewhere it needs the NonUniform decoration.
     bool tableIndexNonUniform = true;
     std::uint32_t storageBufferVariable = 0;
     std::uint32_t storageBufferU64Variable = 0;
@@ -129,6 +139,9 @@ struct SpirvEmitterState {
     std::array<std::uint32_t, 2> scratchVariable {};
     std::array<std::uint32_t, ImageBindingCount> imageVariables {};
     std::uint32_t samplerVariable = 0;
+    std::vector<SpirvTableImageVariable> tableImageVariables;
+    std::uint32_t tableSamplerVariable = 0;
+    std::uint32_t tableMapVariable = 0;
     std::uint32_t mainFunc = 0;
     std::uint32_t meshGuestFunc = 0;
     std::uint32_t meshAllocation = 0;

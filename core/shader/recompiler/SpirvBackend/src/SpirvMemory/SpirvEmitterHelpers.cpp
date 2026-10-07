@@ -1,4 +1,5 @@
 #include "BdaAbi.hpp"
+#include "ImageTableAbi.hpp"
 #include "SpirvBackend/SpirvEmitterHelpers.hpp"
 #include "SpirvBackend/SpirvMemory/SpirvTypes.hpp"
 #include "SpirvBackend/SpirvMemory/SpirvConstants.hpp"
@@ -54,6 +55,33 @@ const ShaderWorkgroupInputInfo* ShaderWorkgroupInput(const SpirvEmitterState& st
 namespace {
 
 constexpr std::uint32_t NoBuiltIn = std::numeric_limits<std::uint32_t>::max();
+
+void RequireTableIndexing(SpirvEmitterState& state) {
+    const auto supported = [&](std::uint32_t capability) {
+        return std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), capability) != state.supportedCapabilities.end();
+    };
+    if (!supported(spv::CapabilityRuntimeDescriptorArray) || !supported(spv::CapabilitySampledImageArrayDynamicIndexing)) {
+        FailEmit("image tables need runtime descriptor arrays with dynamic indexing, which the device lacks");
+    }
+    if (state.spirvVersion < 0x00010500u) {
+        if (std::find(state.supportedExtensions.begin(), state.supportedExtensions.end(), "SPV_EXT_descriptor_indexing") == state.supportedExtensions.end()) {
+            FailEmit("image tables need SPV_EXT_descriptor_indexing, which the device lacks");
+        }
+        state.module.EmitExtension("SPV_EXT_descriptor_indexing");
+    }
+    state.module.EmitCapability(spv::CapabilityRuntimeDescriptorArray);
+    state.module.EmitCapability(spv::CapabilitySampledImageArrayDynamicIndexing);
+}
+
+IrTextureNumericClass TableNumericClass(std::uint32_t tableClass) {
+    switch (tableClass) {
+        case ImageTableAbi::FloatClass: return IrTextureNumericClass::Float;
+        case ImageTableAbi::UintClass: return IrTextureNumericClass::Uint;
+        case ImageTableAbi::SintClass: return IrTextureNumericClass::Sint;
+        default: break;
+    }
+    FailEmit("image table class is invalid");
+}
 
 std::uint32_t BuiltInForInput(StageInputKind kind) {
     switch (kind) {
@@ -140,7 +168,8 @@ void CheckBindings(const IrProgram& program, const BindingAllocationResult& bind
         const IrDescriptorBinding& logical = bindings.layout.descriptors[index];
         const DescriptorBinding& physical = bindings.bindings[index];
         const std::uint32_t expectedCount = logical.resources.empty() ? 1u : static_cast<std::uint32_t>(logical.resources.size());
-        if (physical.count != expectedCount) {
+        const bool table = logical.kind == DescriptorBindingKind::ImageTable || logical.kind == DescriptorBindingKind::SamplerTable;
+        if (!table && physical.count != expectedCount) {
             FailEmit("descriptor binding " + std::to_string(index) + " has an incorrect descriptor count");
         }
         if (physical.descriptorSet != 0u) {
@@ -164,6 +193,14 @@ void CheckBindings(const IrProgram& program, const BindingAllocationResult& bind
             expectedRole = DescriptorRole::FlattenedSrt;
         } else if (logical.kind == DescriptorBindingKind::ShaderData) {
             expectedRole = DescriptorRole::ShaderData;
+        } else if (logical.kind == DescriptorBindingKind::ImageTable) {
+            expectedKind = DescriptorKind::SampledImage;
+            expectedRole = DescriptorRole::ImageTable;
+        } else if (logical.kind == DescriptorBindingKind::SamplerTable) {
+            expectedKind = DescriptorKind::Sampler;
+            expectedRole = DescriptorRole::SamplerTable;
+        } else if (logical.kind == DescriptorBindingKind::ImageTableMap) {
+            expectedRole = DescriptorRole::ImageTableMap;
         } else {
             const auto imageClass = ImageBindingResourceClass(logical.kind);
             if (imageClass == ImageResourceClass::Sampled) {
@@ -425,6 +462,44 @@ void DefineDescriptors(SpirvEmitterState& state) {
             break;
         case DescriptorBindingKind::Gds:
             state.gdsVariable = Define(StorageBufferBlockType(state), "gds");
+            break;
+        case DescriptorBindingKind::ImageTable:
+            RequireTableIndexing(state);
+            for (const auto& view : state.program.Info().tableViews) {
+                if (view.sampler) {
+                    continue;
+                }
+                for (std::uint32_t tableClass = ImageTableAbi::FloatClass; tableClass <= ImageTableAbi::SintClass; tableClass++) {
+                    if ((view.classes & (1u << (tableClass - 1u))) == 0u) {
+                        continue;
+                    }
+                    const auto numericClass = TableNumericClass(tableClass);
+                    const bool declared = std::any_of(state.tableImageVariables.begin(), state.tableImageVariables.end(), [&](const SpirvTableImageVariable& variable) {
+                        return variable.numericClass == numericClass && variable.dimension == view.dimension && variable.depthCompare == view.depthCompare;
+                    });
+                    if (declared) {
+                        continue;
+                    }
+                    ImageResource image;
+                    image.resourceClass = ImageResourceClass::Sampled;
+                    image.numericClass = numericClass;
+                    image.dimension = view.dimension;
+                    image.depthCompare = view.depthCompare;
+                    const auto name = "table_images_" + std::to_string(tableClass) + "_" + std::to_string(static_cast<std::uint32_t>(view.dimension)) + (view.depthCompare ? "_compare" : "");
+                    const auto variable = Define(state.module.Type(spv::OpTypeRuntimeArray, ImageType(state, image)), name.c_str(), spv::StorageClassUniformConstant);
+                    state.tableImageVariables.push_back({numericClass, view.dimension, view.depthCompare, variable});
+                    if (view.dimension == RdnaImageDimension::Dim1D) {
+                        state.module.EmitCapability(spv::CapabilitySampled1D);
+                    }
+                }
+            }
+            break;
+        case DescriptorBindingKind::SamplerTable:
+            RequireTableIndexing(state);
+            state.tableSamplerVariable = Define(state.module.Type(spv::OpTypeRuntimeArray, state.module.Type(spv::OpTypeSampler)), "table_samplers", spv::StorageClassUniformConstant);
+            break;
+        case DescriptorBindingKind::ImageTableMap:
+            state.tableMapVariable = Define(StorageBufferBlockType(state), "table_map");
             break;
         default: {
             if (ImageBindingResourceClass(binding.kind) == ImageResourceClass::None) {

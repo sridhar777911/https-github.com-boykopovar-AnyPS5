@@ -13,10 +13,13 @@ std::uint32_t ImageScalarType(SpirvEmitterState& state, IrTextureNumericClass nu
 std::uint32_t ImageVectorType(SpirvEmitterState& state, IrTextureNumericClass numericClass, std::uint32_t components);
 std::uint32_t ImageType(SpirvEmitterState& state, const ImageResource& image);
 std::uint32_t ImageViewSizeType(SpirvEmitterState& state, RdnaImageDimension dimension);
-// `slotId` (a SPIR-V id, 0 for none) selects a bindless table's slot at runtime: element(resource) + slot.
-std::uint32_t LoadSampledImageDescriptor(SpirvEmitterState& state, std::uint32_t resource, std::uint32_t slotId);
+std::uint32_t LoadSampledImageDescriptor(SpirvEmitterState& state, std::uint32_t resource);
 std::uint32_t LoadSamplerDescriptor(SpirvEmitterState& state, std::uint32_t sampler);
-std::uint32_t MakeSampledImage(SpirvEmitterState& state, std::uint32_t resource, std::uint32_t sampler, std::uint32_t slotId);
+std::uint32_t MakeSampledImage(SpirvEmitterState& state, std::uint32_t resource, std::uint32_t sampler);
+void DecorateTableNonUniform(SpirvEmitterState& state, std::uint32_t id);
+std::uint32_t LoadTableImage(SpirvEmitterState& state, const ImageResource& image, std::uint32_t element);
+std::uint32_t LoadTableSampler(SpirvEmitterState& state, std::uint32_t element);
+std::uint32_t MakeSampledImageFrom(SpirvEmitterState& state, const ImageResource& image, std::uint32_t imageId, std::uint32_t samplerId, bool nonUniform);
 std::uint32_t StorageImageDescriptorPointer(SpirvEmitterState& state, std::uint32_t resource);
 void EmitStorageImageWrite(SpirvEmitterState& state, std::uint32_t resource, std::uint32_t mipLod, std::uint32_t coord, std::uint32_t texel);
 const RdnaImageDimensionInfo& RdnaImageDimensionInfoFor(RdnaImageDimension dimension);
