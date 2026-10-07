@@ -23,6 +23,10 @@ int APS5_VABI sceHttpGetLastErrno(int, int*);
 int APS5_VABI sceHttpSetResponseHeaderMaxSize(int, std::uint64_t);
 int APS5_VABI sceHttpRedirectCacheFlush(int);
 int APS5_VABI sceHttpsUnloadCert(int);
+int APS5_VABI sceHttpsSetSslVersion(int, int);
+int APS5_VABI sceHttpsGetSslError(int, int*, std::uint32_t*);
+int APS5_VABI sceHttpSetRedirectCallback(int, HttpRedirectCallback, void*);
+int APS5_VABI sceHttpSetCookieRecvCallback(int, HttpCookieRecvCallback, void*);
 int APS5_VABI sceHttpParseStatusLine(const char*, std::size_t, std::int32_t*, std::int32_t*, std::int32_t*, const char**, std::size_t*);
 }
 
@@ -200,6 +204,15 @@ int main() {
     Require(sceHttpGetLastErrno(1, &httpErrno) == 0);
     Require(httpErrno == 0);
     Require(sceHttpGetLastErrno(1, nullptr) == invalidValue);
+    Require(sceHttpsSetSslVersion(1, 0) == 0);
+    Require(sceHttpSetRedirectCallback(1, nullptr, nullptr) == 0);
+    Require(sceHttpSetCookieRecvCallback(1, nullptr, nullptr) == 0);
+    int sslError = -1;
+    std::uint32_t sslDetail = 0xFFFFFFFFu;
+    Require(sceHttpsGetSslError(1, &sslError, &sslDetail) == 0);
+    Require(sslError == 0 && sslDetail == 0);
+    Require(sceHttpsGetSslError(1, nullptr, &sslDetail) == invalidValue);
+    Require(sceHttpsGetSslError(1, &sslError, nullptr) == invalidValue);
 
     constexpr int parseInvalidResponse = static_cast<int>(0x80432060);
     constexpr int parseInvalidValue = static_cast<int>(0x804321FE);

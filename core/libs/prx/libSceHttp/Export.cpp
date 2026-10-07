@@ -370,23 +370,33 @@ int APS5_VABI sceHttpGetLastErrno(int request_id, int* errno_out) {
     return 0;
 }
 
-int APS5_VABI sceHttpsGetSslError(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceHttpsGetSslError(int id, int* err_num, uint32_t* detail) {
+    (void)id;
+    if (err_num == nullptr || detail == nullptr) {
+        return ERROR_INVALID_VALUE;
+    }
+    *err_num = 0;
+    *detail = 0;
     return 0;
 }
 
-int APS5_VABI sceHttpSetCookieRecvCallback(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceHttpSetCookieRecvCallback(int id, HttpCookieRecvCallback cbfunc, void* user_arg) {
+    (void)id;
+    (void)cbfunc;
+    (void)user_arg;
     return 0;
 }
 
-int APS5_VABI sceHttpsSetSslVersion(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceHttpsSetSslVersion(int id, int ssl_version) {
+    (void)id;
+    (void)ssl_version;
     return 0;
 }
 
-int APS5_VABI sceHttpSetRedirectCallback(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceHttpSetRedirectCallback(int id, HttpRedirectCallback cbfunc, void* user_arg) {
+    (void)id;
+    (void)cbfunc;
+    (void)user_arg;
     return 0;
 }
 
