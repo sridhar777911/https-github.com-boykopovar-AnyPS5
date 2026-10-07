@@ -38,12 +38,6 @@ static void ReadPcm(const Ngs2Voice& voice, const std::uint8_t* frame, float* ou
 
 static void ReadFrames(Ngs2Voice& voice, float* current, float* next) {
     auto& block = voice.blocks.front();
-    if (voice.waveformType == SCE_NGS2_WAVEFORM_TYPE_ATRAC9) {
-        std::memcpy(current, Ngs2Atrac9Frame(voice, block, block.cursor), voice.channels * sizeof(float));
-        if (block.cursor + 1 < block.info.num_samples) std::memcpy(next, Ngs2Atrac9Frame(voice, block, block.cursor + 1), voice.channels * sizeof(float));
-        else std::memcpy(next, current, voice.channels * sizeof(float));
-        return;
-    }
     ReadPcm(voice, FrameAt(voice, block, block.cursor), current);
     if (block.streaming && block.cursor + 1 >= block.availableFrames) std::memcpy(next, current, voice.channels * sizeof(float));
     else if (block.cursor + 1 < block.info.num_samples) ReadPcm(voice, FrameAt(voice, block, block.cursor + 1), next);
@@ -52,13 +46,14 @@ static void ReadFrames(Ngs2Voice& voice, float* current, float* next) {
     else std::memcpy(next, current, voice.channels * sizeof(float));
 }
 
-static void FinishBlock(Ngs2Voice& voice) {
+bool Ngs2FinishBlock(Ngs2Voice& voice) {
     auto& block = voice.blocks.front();
     const bool repeat = block.info.num_repeats != 0;
     if (repeat) {
         if (block.info.num_repeats != UINT32_MAX) block.info.num_repeats--;
         block.numRepeated++;
         block.cursor = 0;
+        block.started = false;
         if (voice.waveformType == SCE_NGS2_WAVEFORM_TYPE_ATRAC9) {
             block.dataCursor = 0;
             Ngs2RestartAtrac9(voice);
@@ -80,7 +75,9 @@ static void FinishBlock(Ngs2Voice& voice) {
         voice.waveformEnd = voice.waveformType == SCE_NGS2_WAVEFORM_TYPE_ATRAC9 ? block.data + block.dataCursor : block.streaming ? Ngs2StreamEnd(voice, block) : FrameAt(voice, block, block.info.num_samples);
         voice.blocks.pop_front();
     }
+    const auto revision = voice.waveformRevision;
     if (voice.callback != nullptr && (voice.callbackFlags & info.flag) != 0) voice.callback(&info);
+    return voice.waveformRevision == revision && voice.state == Ngs2PlayState::Playing;
 }
 
 static void Advance(Ngs2Voice& voice, std::uint64_t frames) {
@@ -96,7 +93,7 @@ static void Advance(Ngs2Voice& voice, std::uint64_t frames) {
         if (block.streaming) {
             while (block.pieces.size() > 1 && block.cursor >= block.pieces.front().firstFrame + block.pieces.front().frames) block.pieces.erase(block.pieces.begin());
         }
-        if (block.cursor == block.info.num_samples || (block.streaming && !voice.acceptsBlocks && block.cursor == block.availableFrames)) FinishBlock(voice);
+        if (block.cursor == block.info.num_samples || (block.streaming && !voice.acceptsBlocks && block.cursor == block.availableFrames)) Ngs2FinishBlock(voice);
     }
 }
 
@@ -147,13 +144,15 @@ static void ApplyFilter(Ngs2Voice& voice, Ngs2Filter& filter, std::uint32_t grai
 }
 
 static void RenderSampler(Ngs2Voice& voice, std::uint32_t grain, std::uint32_t systemRate) {
-    ConsumeSamples(voice, grain, systemRate);
+    if (voice.waveformType == SCE_NGS2_WAVEFORM_TYPE_ATRAC9) Ngs2ConsumeAtrac9(voice, grain, systemRate);
+    else ConsumeSamples(voice, grain, systemRate);
     for (auto& filter : voice.filters) {
         if (!filter.enabled || (!voice.hasSamples && !HasHistory(filter))) continue;
         ApplyFilter(voice, filter, grain);
         voice.hasSamples = true;
     }
-    if (voice.state == Ngs2PlayState::Playing && voice.blocks.empty() && !voice.acceptsBlocks && std::none_of(voice.filters.begin(), voice.filters.end(), HasHistory)) {
+    const bool buffered = voice.waveformType == SCE_NGS2_WAVEFORM_TYPE_ATRAC9 && voice.atrac9.windowCursor * voice.channels < voice.atrac9.window.size();
+    if (voice.state == Ngs2PlayState::Playing && voice.blocks.empty() && !buffered && !voice.acceptsBlocks && std::none_of(voice.filters.begin(), voice.filters.end(), HasHistory)) {
         voice.state = Ngs2PlayState::Empty;
     }
 }
