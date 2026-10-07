@@ -1326,6 +1326,33 @@ void resourceTests() {
         expectStageResources(Role::GuestSamplers, Kind::Sampler, 4, 2, "shader sampler descriptors exceed per-stage limits");
     }
     {
+        ShaderRecompiler::RecompileResult fragment;
+        const auto expectTableResources = [&](Role role, std::uint32_t bufferLimit, std::uint32_t resourceLimit, std::string_view reason) {
+            const bool map = role == Role::ImageTableMap;
+            ShaderRecompiler::RecompileResult vertex;
+            vertex.bindings.push_back(makeBinding(Role::GuestBuffers, 0, 2, join(vsharp(guestFirst.data(), 16), vsharp(guestSecond.data(), 32))));
+            if (map) {
+                vertex.bindings.push_back(makeBinding(Role::FaultBuffer, 2, 1, {}));
+                vertex.bdaAbiVersion = ShaderRecompiler::BdaAbi::Version;
+            }
+            vertex.bindings.push_back(makeBinding(role, 1, map ? 1u : 4u, std::vector<std::uint32_t>(map ? 2u : 0u, 0u)));
+            if (!map) vertex.bindings.back().kind = Kind::SampledImage;
+            mock = MockVulkan{};
+            auto limited = mockContext();
+            limited.runtimeDescriptorArray = true;
+            limited.partiallyBound = true;
+            limited.limits.maxPerStageDescriptorStorageBuffers = bufferLimit;
+            limited.limits.maxPerStageResources = resourceLimit;
+            expectFailure([&] { AgcDriver::Graphics::ShaderResources resources(limited, vertex, fragment, state.color, 0, 0); }, reason);
+            Require(mock.live == 0, "failed shader resources leaked Vulkan objects");
+        };
+        expectTableResources(Role::ImageTable, 16, 5, "shader descriptors exceed per-stage limits");
+        expectTableResources(Role::ImageTable, 16, 6, "device texture cache is unavailable");
+        expectTableResources(Role::ImageTableMap, 3, 128, "shader descriptors exceed per-stage limits");
+        expectTableResources(Role::ImageTableMap, 16, 3, "shader descriptors exceed per-stage limits");
+        expectTableResources(Role::ImageTableMap, 4, 4, "BDA fault buffer exceeds storage buffer range limit");
+    }
+    {
         ShaderRecompiler::RecompileResult vertex;
         ShaderRecompiler::RecompileResult fragment;
         vertex.bindings.push_back(makeBinding(Role::GuestBuffers, 0, 1, vsharp(guestFirst.data(), 16)));
@@ -1824,9 +1851,9 @@ void validationTests() {
             expectFailure([&] { AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false); }, "fragmentShaderBarycentric");
         }
         pixel.spirv = makeModule({.fragment = true, .sampleId = true, .layer = true, .fragDepth = true, .sampleMaskLength = 1});
-        AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false, false, false, true, true);
-        expectFailure([&] { AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false, false, false, false, true); }, "unsupported device capability 2");
-        expectFailure([&] { AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false, false, false, true, false); }, "unsupported device capability 35");
+        AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false, false, false, false, true, true);
+        expectFailure([&] { AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false, false, false, false, false, true); }, "unsupported device capability 2");
+        expectFailure([&] { AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false, false, false, false, true, false); }, "unsupported device capability 35");
         pixel.spirv = makeModule({.fragment = true, .sampleMaskLength = 2});
         expectFailure([&] { AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false); }, "unsupported fragment built-in");
         vertex.spirv = makeModule({.parameterOutput = true, .sampleId = true});

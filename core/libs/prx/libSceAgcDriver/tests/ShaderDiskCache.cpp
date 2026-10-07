@@ -33,7 +33,7 @@ void setEnvironment(const char* name, const std::string& value) {
 }
 
 bool sameBinding(const DescriptorBinding& left, const DescriptorBinding& right) {
-    return left.kind == right.kind && left.role == right.role && left.descriptorSet == right.descriptorSet && left.binding == right.binding && left.count == right.count && left.guestDescriptor == right.guestDescriptor && left.readOnly == right.readOnly && left.imageShape == right.imageShape && left.samplerDepthCompare == right.samplerDepthCompare && left.imageWritten == right.imageWritten && left.imageDepthCompare == right.imageDepthCompare && left.imageAtomic == right.imageAtomic && left.bufferAtomic == right.bufferAtomic && left.bufferWritten == right.bufferWritten && left.samplerUnnormalized == right.samplerUnnormalized && left.imageUnnormalized == right.imageUnnormalized && left.imageSamplers == right.imageSamplers;
+    return left.kind == right.kind && left.role == right.role && left.descriptorSet == right.descriptorSet && left.binding == right.binding && left.count == right.count && left.guestDescriptor == right.guestDescriptor && left.readOnly == right.readOnly && left.imageShape == right.imageShape && left.samplerDepthCompare == right.samplerDepthCompare && left.imageWritten == right.imageWritten && left.imageDepthCompare == right.imageDepthCompare && left.imageAtomic == right.imageAtomic && left.imageShapes == right.imageShapes && left.bufferAtomic == right.bufferAtomic && left.bufferWritten == right.bufferWritten && left.samplerUnnormalized == right.samplerUnnormalized && left.imageUnnormalized == right.imageUnnormalized && left.imageSamplers == right.imageSamplers;
 }
 
 bool sameBindings(const std::vector<DescriptorBinding>& left, const std::vector<DescriptorBinding>& right) {
@@ -95,6 +95,7 @@ DescriptorBinding sampleBinding(std::uint32_t seed) {
     binding.imageDepthCompare = {false, true, false};
     binding.imageWritten = {false, true, true};
     binding.imageAtomic = {false, true, false};
+    binding.imageShapes = {DescriptorImageShape::Image2D, DescriptorImageShape::Image3D};
     binding.bufferAtomic = {true};
     binding.bufferWritten = {false, false, true, true, false};
     binding.samplerUnnormalized = {false, true, true};
@@ -167,13 +168,13 @@ CompiledVariant sampleVariant() {
     image.srgbDecode = true;
     image.cube = true;
     image.r128 = true;
-    image.indirectRoot = 0;
-    image.indirectMappingOffset = 12;
-    image.indirectSearchIterations = 3;
-    image.indirectResources = {1, 2, 3};
+    image.emulatedCompare = 0x1a07u;
+    image.tableView = 0;
     info.info.images = {image};
-    info.info.samplers = {{7, 0x10, true, false, SamplerUseExplicitLod | SamplerUseGather}};
-    info.info.sampledPairs = {{0, 0, 0x10}};
+    info.info.samplers = {{7, 0x10, true, false, SamplerUseExplicitLod | SamplerUseGather, 1}};
+    info.info.sampledPairs = {{0, 0, 0x10, 2}};
+    info.info.tableViews = {{5, false, RdnaImageDimension::Dim2D, true, true, 5}, {7, true, RdnaImageDimension::Unknown, false, false, 3}};
+    info.info.usesFaultBuffer = true;
     StageInput input{};
     input.kind = StageInputKind::GlobalInvocationId;
     input.location = 2;
@@ -232,6 +233,7 @@ struct SampleRequest {
         request.layout = {0, 0, 0, 128};
         specialization.buffers = {{16u, IrBufferFormat::Invalid, 0xfacu}};
         specialization.images = {ResourceSpecialization::Image{}};
+        specialization.tableViewClasses = {1u};
         specialization.boundDescriptors = {0, 0};
     }
 
@@ -350,9 +352,9 @@ void verifyKeySensitivity() {
     changes("an image mip count", [](SampleRequest& sample) { sample.specialization.images[0].mipCount = 2; });
     changes("an image conversion", [](SampleRequest& sample) { sample.specialization.images[0].conversionFormat = static_cast<IrBufferFormat>(1); });
     changes("an image swizzle", [](SampleRequest& sample) { sample.specialization.images[0].shaderSwizzle = 0; });
-    changes("an image indirect root", [](SampleRequest& sample) { sample.specialization.images[0].indirectRoot = 0; });
-    changes("an image mapping offset", [](SampleRequest& sample) { sample.specialization.images[0].indirectMappingOffset = 4; });
-    changes("an image search depth", [](SampleRequest& sample) { sample.specialization.images[0].indirectSearchIterations = 2; });
+    changes("an image emulated comparison", [](SampleRequest& sample) { sample.specialization.images[0].emulatedCompare = 0x1a07u; });
+    changes("an image table view class", [](SampleRequest& sample) { sample.specialization.tableViewClasses[0] = 3u; });
+    changes("the image table view count", [](SampleRequest& sample) { sample.specialization.tableViewClasses.push_back(0u); });
     changes("an image cube flag", [](SampleRequest& sample) { sample.specialization.images[0].cube = true; });
     changes("an image FMASK flag", [](SampleRequest& sample) { sample.specialization.images[0].fmask = true; });
     changes("an image sRGB decode", [](SampleRequest& sample) { sample.specialization.images[0].srgbDecode = true; });
