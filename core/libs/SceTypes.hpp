@@ -1729,6 +1729,8 @@ struct SystemGestureTouchEvent { std::uint8_t reserve[168]; };
 
 struct UserServiceLoginUserIdList { int user_id[4]; };
 
+struct UserServiceRegisteredUserIdList { int user_id[16]; };
+
 struct SceUserServiceEvent {
     std::uint32_t event_type;
     int user_id;

@@ -852,6 +852,7 @@ DescriptorBindingKind DescriptorBindingForImage(const ImageResource& image) {
     constexpr std::uint32_t storageFloatBinding = FirstStorageImageBinding;
     constexpr std::uint32_t storageUintBinding = storageFloatBinding + 5u;
     constexpr std::uint32_t atomicUintBinding = storageUintBinding + 5u;
+    constexpr std::uint32_t atomic64UintBinding = atomicUintBinding + 5u;
 
     std::uint32_t base = 0u;
     bool sampled = false;
@@ -882,7 +883,7 @@ DescriptorBindingKind DescriptorBindingForImage(const ImageResource& image) {
             if (image.numericClass != IrTextureNumericClass::Uint) {
                 fail("DescriptorBindingForImage atomic image must be uint");
             }
-            base = atomicUintBinding;
+            base = image.atomic64 ? atomic64UintBinding : atomicUintBinding;
         } else {
             switch (image.numericClass) {
                 case IrTextureNumericClass::Float:

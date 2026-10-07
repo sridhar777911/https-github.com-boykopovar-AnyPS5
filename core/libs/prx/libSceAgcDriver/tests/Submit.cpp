@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -61,6 +63,15 @@ void testEvents() {
     expectFailure([&] { sceAgcDriverGetEqEventType(&event); });
     expectFailure([] { sceAgcDriverGetEqEventType(nullptr); });
     expectFailure([&] { sceAgcDriverGetEqEventType(reinterpret_cast<const KernelEvent*>(reinterpret_cast<const std::byte*>(&event) + 1)); });
+    event.ident = 0x29;
+    check(sceAgcDriverGetEqContextId(&event) == 0x29, "graphics event context id uses wrong field");
+    event.ident = std::numeric_limits<std::uintptr_t>::max();
+    expectFailure([&] { sceAgcDriverGetEqContextId(&event); });
+    event.ident = 1;
+    event.filter = -1;
+    expectFailure([&] { sceAgcDriverGetEqContextId(&event); });
+    expectFailure([] { sceAgcDriverGetEqContextId(nullptr); });
+    expectFailure([&] { sceAgcDriverGetEqContextId(reinterpret_cast<const KernelEvent*>(reinterpret_cast<const std::byte*>(&event) + 1)); });
 }
 
 void testValidation() {
@@ -172,10 +183,12 @@ void testEndOfPipeInterrupts() {
     std::array<KernelEvent, 2> events{};
     check(owner->GetTriggeredEvents(events.data(), 2) == 1, "graphics end-of-pipe interrupt was not delivered to its queue only");
     check(events[0].filter == -14 && events[0].udata == &graphicsTag && events[0].data == 2 && sceAgcDriverGetEqEventType(events.data()) == 0, "graphics end-of-pipe event encoding is wrong");
+    check(sceAgcDriverGetEqContextId(events.data()) == 0, "graphics end-of-pipe event reports another context");
     check(owner->GetTriggeredEvents(events.data(), 2) == 0, "delivered interrupt was not cleared");
     check(sceAgcDriverSubmitAcb(0x20, &packet) == 0, "compute interrupt submit failed");
     AgcDriverWaitIdle_nid_postfix();
     check(owner->GetTriggeredEvents(events.data(), 2) == 1 && events[0].udata == &computeTag && sceAgcDriverGetEqEventType(events.data()) == 0x20, "compute end-of-pipe interrupt missing");
+    check(sceAgcDriverGetEqContextId(events.data()) == 0x20, "compute end-of-pipe event reports another context");
     words[2] = 0;
     check(sceAgcDriverSubmitDcb(&packet) == 0, "plain release submit failed");
     AgcDriverWaitIdle_nid_postfix();
@@ -333,6 +346,48 @@ void testWaitFreeSubmissionBehindHeldOne() {
     AgcDriverWaitIdle_nid_postfix();
 }
 
+void testMultiAcbs() {
+    alignas(64) static volatile std::uint32_t value = 0, done = 0, gate = 0;
+    check(sceAgcDriverSubmitMultiAcbs(0x20, nullptr, nullptr, 0) == 0, "empty multi-ACB submit failed");
+    auto write = writeData(&value, 1);
+    std::array<std::uint32_t*, 1> addresses{write.data()};
+    std::array<std::uint32_t, 1> sizes{static_cast<std::uint32_t>(write.size())};
+    expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0x1f, addresses.data(), sizes.data(), 1); });
+    expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0x58, addresses.data(), sizes.data(), 1); });
+    expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0, addresses.data(), sizes.data(), 1); });
+    check(sceAgcDriverSubmitMultiAcbs(0, nullptr, nullptr, 0) == 0, "empty multi-ACB submit checked its queue");
+    expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0x20, nullptr, sizes.data(), 1); });
+    expectFailure([&] { sceAgcDriverSubmitMultiAcbs(0x20, addresses.data(), nullptr, 1); });
+    check(value == 0, "a rejected multi-ACB submit ran a command buffer");
+    for (std::uint32_t queue : {0x20u, 0x57u}) {
+        value = 0;
+        done = 0;
+        auto first = writeData(&value, 1);
+        auto second = writeData(&value, 2);
+        auto third = writeData(&done, 1);
+        std::array<std::uint32_t*, 3> buffers{first.data(), second.data(), third.data()};
+        std::array<std::uint32_t, 3> lengths{static_cast<std::uint32_t>(first.size()), static_cast<std::uint32_t>(second.size()), static_cast<std::uint32_t>(third.size())};
+        check(sceAgcDriverSubmitMultiAcbs(queue, buffers.data(), lengths.data(), 3) == 0, "multi-ACB submit failed");
+        waitFor(&done, 1, "the last ACB of a multi-ACB submit never ran");
+        check(value == 2, "multi-ACB submit did not run its ACBs in order");
+        AgcDriverWaitIdle_nid_postfix();
+    }
+    done = 0;
+    value = 0;
+    auto wait = waitEqual(&gate, 1);
+    auto finish = writeData(&done, 1);
+    std::array<std::uint32_t*, 2> buffers{wait.data(), finish.data()};
+    std::array<std::uint32_t, 2> lengths{static_cast<std::uint32_t>(wait.size()), static_cast<std::uint32_t>(finish.size())};
+    check(sceAgcDriverSubmitMultiAcbs(0x21, buffers.data(), lengths.data(), 2) == 0, "waiting multi-ACB submit failed");
+    submit(0x21, commands(writeData(&value, 1)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    check(value == 0 && done == 0, "a later submission on the same compute queue overtook a multi-ACB submit");
+    gate = 1;
+    waitFor(&value, 1, "a submission queued behind a multi-ACB submit never ran");
+    check(done == 1, "a multi-ACB submit did not run before a later submission on its queue");
+    AgcDriverWaitIdle_nid_postfix();
+}
+
 void testWaitFreeSubmissionTheCpuWaitsFor() {
     alignas(64) static volatile std::uint32_t stored = 0, flag = 0, done = 0;
     submit(0, commands(waitEqual(&flag, 1), writeData(&done, 1)));
@@ -372,6 +427,34 @@ void testMultiSubmissions() {
         check(value == 2, "multi-DCB submit did not run its DCBs in order");
         AgcDriverWaitIdle_nid_postfix();
     }
+}
+
+void testShaderHeaderAlignment() {
+    alignas(256) static const std::array<std::uint32_t, 64> code{0xbf810000};
+    alignas(8) static std::array<std::byte, 2 * sizeof(Shader)> storage{};
+    Shader shader{};
+    shader.file_header = 0x34333231;
+    shader.version = 0x18;
+    shader.header_size = sizeof(Shader);
+    shader.shader_size = sizeof(code);
+    shader.code = code.data();
+    const auto at = [](std::size_t offset, const Shader& fields) {
+        std::memcpy(storage.data() + offset, &fields, sizeof(fields));
+        return reinterpret_cast<const Shader*>(storage.data() + offset);
+    };
+    for (const std::size_t offset : {0, 4, 1}) AgcDriverRegisterShader_nid_postfix(at(offset, shader));
+    const auto refused = [](const std::string& message, const char* reason) { check(message.find(reason) != std::string::npos, message.c_str()); };
+    refused(expectFailure([] { AgcDriverRegisterShader_nid_postfix(nullptr); }), "null or misaligned address");
+    refused(expectFailure([] { AgcDriverRegisterShader_nid_postfix(reinterpret_cast<const Shader*>(0x1001)); }), "not readable");
+    Shader misplaced = shader;
+    misplaced.code = code.data() + 1;
+    refused(expectFailure([&] { AgcDriverRegisterShader_nid_postfix(at(4, misplaced)); }), "null or misaligned address");
+    Shader older = shader;
+    older.version = 0x17;
+    refused(expectFailure([&] { AgcDriverRegisterShader_nid_postfix(at(1, older)); }), "invalid shader header");
+    Shader truncated = shader;
+    truncated.header_size = sizeof(Shader) - 4;
+    refused(expectFailure([&] { AgcDriverRegisterShader_nid_postfix(at(4, truncated)); }), "smaller than its fixed fields");
 }
 
 void testWorkerFailure() {
@@ -467,9 +550,11 @@ int main() {
         testWideLabelStoredSinceSubmission();
         testWaitFreeSubmissionAfterEarlierQueue0Work();
         testWaitFreeSubmissionQueue0WaitsOn();
+        testMultiAcbs();
         testWaitFreeSubmissionBehindHeldOne();
         testWaitFreeSubmissionTheCpuWaitsFor();
         testMultiSubmissions();
+        testShaderHeaderAlignment();
         testWorkerFailure();
         check(expectFailure([] { LibcRunShutdown_nid_postfix(); }).find("required shader register") != std::string::npos, "shutdown lost worker failure");
         std::puts("AGC driver submit tests passed");

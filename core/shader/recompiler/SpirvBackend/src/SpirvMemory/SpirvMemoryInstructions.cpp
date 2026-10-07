@@ -580,11 +580,35 @@ void FormattedStore(SpirvValueEmitContext& ctx, const IrValue& inst, const Memor
     });
 }
 
+std::uint32_t LoadCoherentPair(SpirvValueEmitContext& ctx, const IrValue& inst, const MemoryInfo& mem, const MemoryResourceAccess& resource) {
+    auto& state = ctx.state;
+    const auto wide = PrepareStorageBufferResourceAccess(state, mem, state.storageBufferU64Variable, TypeStorageBufferU64Pointer(state));
+    const auto byteAddress = Binary(state, spv::OpIAdd, TypeU32(state), ByteAddress(ctx, inst, mem), wide.byteOffset);
+    const auto index = Binary(state, spv::OpShiftRightLogical, TypeU32(state), byteAddress, ConstantU32(state, 3u));
+    const auto aligned = Binary(state, spv::OpIEqual, TypeBool(state), Binary(state, spv::OpBitwiseAnd, TypeU32(state), byteAddress, ConstantU32(state, 7u)), ConstantU32(state, 0u));
+    return EmitValueIfElse(state, AndCondition(state, aligned, EmitMemoryElementInBounds(state, wide, index)), TypeU32Composite(state, 2u), [&]() {
+        const auto pointer = EmitStorageBufferElementPointer(state, wide, index, TypeStorageBufferU64ElementPointer(state));
+        const auto value = state.module.AllocateId();
+        state.module.AddFunction(spv::OpAtomicLoad, TypeScalarU64(state), value, pointer, ConstantU32(state, spv::ScopeDevice), ConstantU32(state, spv::MemorySemanticsMaskNone));
+        const auto high = Binary(state, spv::OpShiftRightLogical, TypeScalarU64(state), value, BdaConstant(state, 32u));
+        return ConstructU32Composite(state, 2u, {Unary(state, spv::OpUConvert, TypeU32(state), value), Unary(state, spv::OpUConvert, TypeU32(state), high), 0u, 0u});
+    }, [&]() {
+        std::array<std::uint32_t, 4> values{};
+        for (std::uint32_t component = 0; component < 2u; component++) {
+            values.at(component) = LoadWordPrepared(ctx, inst, RebaseRawComponent(mem, component), resource);
+        }
+        return ConstructU32Composite(state, 2u, values);
+    });
+}
+
 std::uint32_t LoadWideBuffer(SpirvValueEmitContext& ctx, const IrValue& inst, const MemoryInfo& mem, std::uint32_t components) {
     auto& state = ctx.state;
     return EmitValueOrDefaultIfCondition(state, ActiveArgument(ctx, inst), TypeU32Composite(state, components), ConstantU32CompositeZero(state, components), [&]() {
         const auto resource = PrepareMemoryResourceAccess(state, mem);
         const auto info = MemoryFormatInfo(state, mem);
+        if (info.type == SpirvFormatComponentType::Unknown && components == 2u && mem.coherent && state.storageBufferU64Variable != 0u) {
+            return LoadCoherentPair(ctx, inst, mem, resource);
+        }
         if (info.type != SpirvFormatComponentType::Unknown) {
             const auto plan = PrepareFormattedMemory(ctx, inst, mem, resource, info, components, FormattedAccess::Load);
             return EmitValueOrDefaultIfCondition(state, plan.inBounds, TypeU32Composite(state, components), FormattedOutOfBoundsValue(ctx, mem, plan, components), [&]() {
@@ -1180,11 +1204,17 @@ std::uint32_t AppendConsume(SpirvValueEmitContext& ctx, const IrValue& inst, boo
     }
     const auto& mem = SharedMemory(ctx, inst);
     const bool wave64 = state.laneCount == 2u;
-    const auto m0 = ctx.Arg(inst, 0);
-    const auto base = Binary(state, spv::OpShiftRightLogical, TypeU32(state), m0, ConstantU32(state, 16u));
-    const auto size = Binary(state, spv::OpBitwiseAnd, TypeU32(state), m0, ConstantU32(state, 0xffffu));
-    const auto address = Binary(state, spv::OpIAdd, TypeU32(state), base, ConstantU32(state, mem.offset));
-    const auto rawIndex = Binary(state, spv::OpShiftRightLogical, TypeU32(state), address, ConstantU32(state, 2u));
+    const bool gds = mem.kind == ResourceKind::Gds;
+    std::uint32_t rawIndex = ConstantU32(state, mem.offset >> 2u);
+    std::uint32_t m0Bounds = 0;
+    if (gds) {
+        const auto m0 = ctx.Arg(inst, 0);
+        const auto base = Binary(state, spv::OpShiftRightLogical, TypeU32(state), m0, ConstantU32(state, 16u));
+        const auto size = Binary(state, spv::OpBitwiseAnd, TypeU32(state), m0, ConstantU32(state, 0xffffu));
+        const auto address = Binary(state, spv::OpIAdd, TypeU32(state), base, ConstantU32(state, mem.offset));
+        rawIndex = Binary(state, spv::OpShiftRightLogical, TypeU32(state), address, ConstantU32(state, 2u));
+        m0Bounds = Binary(state, spv::OpINotEqual, TypeBool(state), size, ConstantU32(state, 0u));
+    }
     const auto access = PrepareMemoryResourceAccess(state, mem);
     const auto index = EmitMemoryElementIndex(state, access, rawIndex);
     const auto exec = ctx.Arg(inst, 1);
@@ -1198,12 +1228,12 @@ std::uint32_t AppendConsume(SpirvValueEmitContext& ctx, const IrValue& inst, boo
     const auto sourceLane = wave64 ? Binary(state, spv::OpBitwiseAnd, TypeU32(state), first, ConstantU32(state, 31u)) : first;
     const auto isFirst = Binary(state, spv::OpIEqual, TypeBool(state), EmitSubgroupLocalInvocationId(state), sourceLane);
     const auto storageBounds = EmitMemoryElementInBounds(state, access, index);
-    const auto m0Bounds = mem.kind == ResourceKind::Gds ? Binary(state, spv::OpINotEqual, TypeBool(state), size, ConstantU32(state, 0u)) : Binary(state, spv::OpULessThan, TypeBool(state), ConstantU32(state, mem.offset + 3u), size);
+    const auto bounds = gds ? AndCondition(state, storageBounds, m0Bounds) : storageBounds;
     const auto lanesActive = wave64 ? Binary(state, spv::OpINotEqual, TypeBool(state), count, ConstantU32(state, 0u)) : exec;
-    const auto condition = AndCondition(state, isFirst, AndCondition(state, lanesActive, AndCondition(state, storageBounds, m0Bounds)));
+    const auto condition = AndCondition(state, isFirst, AndCondition(state, lanesActive, bounds));
     const auto atomic = EmitValueOrZeroIfCondition(state, condition, [&]() {
         const auto value = state.module.AllocateId();
-        state.module.AddFunction(append ? spv::OpAtomicIAdd : spv::OpAtomicISub, TypeU32(state), value, EmitMemoryElementPointer(state, access, index), ConstantU32(state, mem.kind == ResourceKind::Gds ? spv::ScopeDevice : spv::ScopeWorkgroup), ConstantU32(state, spv::MemorySemanticsMaskNone), count);
+        state.module.AddFunction(append ? spv::OpAtomicIAdd : spv::OpAtomicISub, TypeU32(state), value, EmitMemoryElementPointer(state, access, index), ConstantU32(state, gds ? spv::ScopeDevice : spv::ScopeWorkgroup), ConstantU32(state, spv::MemorySemanticsMaskNone), count);
         return value;
     });
     const auto result = state.module.AllocateId();
@@ -1214,35 +1244,73 @@ std::uint32_t AppendConsume(SpirvValueEmitContext& ctx, const IrValue& inst, boo
 template<typename TUpdate>
 std::uint32_t LockedLdsUpdate(SpirvEmitterState& state, TUpdate&& update) {
     const auto lock = EmitLdsLockPointer(state);
+    const auto entry = state.currentLabel;
     const auto header = state.module.AllocateId();
     const auto body = state.module.AllocateId();
+    const auto pending = state.module.AllocateId();
+    const auto spinHeader = state.module.AllocateId();
+    const auto spinBody = state.module.AllocateId();
+    const auto spinCont = state.module.AllocateId();
     const auto critical = state.module.AllocateId();
-    const auto after = state.module.AllocateId();
+    const auto servedMerge = state.module.AllocateId();
+    const auto pendingMerge = state.module.AllocateId();
     const auto cont = state.module.AllocateId();
     const auto merge = state.module.AllocateId();
+    const auto done = state.module.AllocateId();
+    const auto result = state.module.AllocateId();
+    const auto doneNext = state.module.AllocateId();
+    const auto resultNext = state.module.AllocateId();
     state.module.AddFunction(spv::OpBranch, header);
     EmitLabel(state, header);
+    state.module.AddFunction(spv::OpPhi, TypeBool(state), done, ConstantBool(state, false), entry, doneNext, cont);
+    state.module.AddFunction(spv::OpPhi, TypeU64(state), result, ConstantU64(state, 0u), entry, resultNext, cont);
     state.module.AddFunction(spv::OpLoopMerge, merge, cont, spv::LoopControlMaskNone);
     state.module.AddFunction(spv::OpBranch, body);
     EmitLabel(state, body);
+    state.module.AddFunction(spv::OpSelectionMerge, pendingMerge, spv::SelectionControlMaskNone);
+    state.module.AddFunction(spv::OpBranchConditional, done, pendingMerge, pending);
+    EmitLabel(state, pending);
+    const auto elected = state.module.AllocateId();
+    state.module.AddFunction(spv::OpGroupNonUniformElect, TypeBool(state), elected, ConstantU32(state, spv::ScopeSubgroup));
+    state.module.AddFunction(spv::OpSelectionMerge, servedMerge, spv::SelectionControlMaskNone);
+    state.module.AddFunction(spv::OpBranchConditional, elected, spinHeader, servedMerge);
+    EmitLabel(state, spinHeader);
+    state.module.AddFunction(spv::OpLoopMerge, critical, spinCont, spv::LoopControlMaskNone);
+    state.module.AddFunction(spv::OpBranch, spinBody);
+    EmitLabel(state, spinBody);
     const auto previous = state.module.AllocateId();
     state.module.AddFunction(spv::OpAtomicCompareExchange, TypeU32(state), previous, lock, ConstantU32(state, spv::ScopeWorkgroup), ConstantU32(state, spv::MemorySemanticsAcquireMask | spv::MemorySemanticsWorkgroupMemoryMask), ConstantU32(state, spv::MemorySemanticsMaskNone), ConstantU32(state, 1u), ConstantU32(state, 0u));
     const auto acquired = Binary(state, spv::OpIEqual, TypeBool(state), previous, ConstantU32(state, 0u));
-    state.module.AddFunction(spv::OpSelectionMerge, after, spv::SelectionControlMaskNone);
-    state.module.AddFunction(spv::OpBranchConditional, acquired, critical, after);
+    state.module.AddFunction(spv::OpBranchConditional, acquired, critical, spinCont);
+    EmitLabel(state, spinCont);
+    state.module.AddFunction(spv::OpBranch, spinHeader);
     EmitLabel(state, critical);
     const auto old = update();
     state.module.AddFunction(spv::OpAtomicStore, lock, ConstantU32(state, spv::ScopeWorkgroup), ConstantU32(state, spv::MemorySemanticsReleaseMask | spv::MemorySemanticsWorkgroupMemoryMask), ConstantU32(state, 0u));
     const auto criticalExit = state.currentLabel;
-    state.module.AddFunction(spv::OpBranch, after);
-    EmitLabel(state, after);
-    const auto result = state.module.AllocateId();
-    state.module.AddFunction(spv::OpPhi, TypeU64(state), result, old, criticalExit, ConstantU64(state, 0u), body);
-    state.module.AddFunction(spv::OpBranchConditional, acquired, merge, cont);
+    state.module.AddFunction(spv::OpBranch, servedMerge);
+    EmitLabel(state, servedMerge);
+    const auto served = state.module.AllocateId();
+    const auto servedResult = state.module.AllocateId();
+    state.module.AddFunction(spv::OpPhi, TypeBool(state), served, ConstantBool(state, true), criticalExit, ConstantBool(state, false), pending);
+    state.module.AddFunction(spv::OpPhi, TypeU64(state), servedResult, old, criticalExit, result, pending);
+    state.module.AddFunction(spv::OpBranch, pendingMerge);
+    EmitLabel(state, pendingMerge);
+    state.module.AddFunction(spv::OpPhi, TypeBool(state), doneNext, served, servedMerge, done, body);
+    state.module.AddFunction(spv::OpPhi, TypeU64(state), resultNext, servedResult, servedMerge, result, body);
+    const auto ballot = state.module.AllocateId();
+    state.module.AddFunction(spv::OpGroupNonUniformBallot, TypeU32Vector(state, 4u), ballot, ConstantU32(state, spv::ScopeSubgroup), Unary(state, spv::OpLogicalNot, TypeBool(state), doneNext));
+    std::uint32_t remaining = ConstantU32(state, 0u);
+    for (std::uint32_t component = 0; component < 4u; ++component) {
+        const auto word = state.module.AllocateId();
+        state.module.AddFunction(spv::OpCompositeExtract, TypeU32(state), word, ballot, component);
+        remaining = Binary(state, spv::OpBitwiseOr, TypeU32(state), remaining, word);
+    }
+    state.module.AddFunction(spv::OpBranchConditional, Binary(state, spv::OpINotEqual, TypeBool(state), remaining, ConstantU32(state, 0u)), cont, merge);
     EmitLabel(state, cont);
     state.module.AddFunction(spv::OpBranch, header);
     EmitLabel(state, merge);
-    return result;
+    return resultNext;
 }
 
 template<typename TReplacement>

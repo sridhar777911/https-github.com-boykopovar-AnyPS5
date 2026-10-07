@@ -82,6 +82,7 @@ struct SpirvEmitterState {
 
     SpirvRequirements requirements;
     std::uint32_t laneCount = 1;
+    std::uint32_t hostSubgroupSize = 0;
     bool splitSubgroup = false;
     std::unordered_set<const IrValue*> sharedLaneValues;
     std::uint32_t laneHalf = 0;
@@ -96,7 +97,7 @@ struct SpirvEmitterState {
     bool tableIndexNonUniform = true;
     std::uint32_t storageBufferVariable = 0;
     std::uint32_t storageBufferU64Variable = 0;
-    std::array<std::uint32_t, ShaderInfo::MaxBuffers> memoryByteOffsets {};
+    std::vector<std::uint32_t> memoryByteOffsets;
     std::uint32_t bdaPagetableVariable = 0;
     std::uint32_t faultBufferVariable = 0;
     std::uint32_t bdaPointerFunction = 0;
@@ -105,6 +106,9 @@ struct SpirvEmitterState {
     std::uint32_t bdaProbeFunction = 0;
     std::uint32_t bdaWritePointerFunction = 0;
     std::uint32_t bdaNoteWriteFunction = 0;
+    std::uint32_t bdaFaultFunction = 0;
+    std::array<std::array<std::uint32_t, 2>, 2> bdaDwordReadFunctions {};
+    std::uint32_t bdaStopValue = 0;
     // False for programs with workgroup barriers: faulting BDA accesses then continue (see BdaInvocationsMayStop).
     bool bdaStopsInvocations = true;
     // Execution scope of the barriers that keep one guest wave's LDS accesses in program order across
@@ -115,6 +119,7 @@ struct SpirvEmitterState {
     std::uint32_t loopGuardLimit = 0;
     std::uint32_t loopGuardVisits = 0;
     std::uint32_t loopGuardPc = 0;
+    std::uint32_t srgbTableVariable = 0;
     std::uint32_t gdsVariable = 0;
     std::uint32_t gdsLength = 0;
     std::uint32_t pushConstantVariable = 0;

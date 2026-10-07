@@ -134,6 +134,11 @@ public:
                 function<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")(context.physical, &properties);
                 context.hostImportAlignment = hostProperties.minImportedHostPointerAlignment;
             }
+            if (hasExtension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) && hasExtension(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME)) {
+                extensionsEnabled.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+                extensionsEnabled.push_back(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+                context.dmaBufImport = true;
+            }
             VkPhysicalDeviceImageViewMinLodFeaturesEXT minLod{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_VIEW_MIN_LOD_FEATURES_EXT};
             if (hasExtension(VK_EXT_IMAGE_VIEW_MIN_LOD_EXTENSION_NAME)) {
                 VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &minLod};
@@ -1629,6 +1634,15 @@ void importWatchTests(const Device& device) {
     const auto probe = ProbeImportWriteProtection(context);
     Require(probe.failure == nullptr, std::string("(u) the import probe failed at ") + (probe.failure != nullptr ? probe.failure : "") + " (" + std::to_string(static_cast<int>(probe.result)) + ")");
     std::cout << "import probe: " << probe.writtenAfterSubmit << " of " << probe.pages << " scratch pages written after a GPU read, " << probe.writtenAtImport << " after the import\n";
+    Require(probe.writtenByCpu != 0, "(u) a CPU store after the import probe's GPU read was not collected");
+    if (context.dmaBufImport) {
+        const auto dmaBuf = ProbeDmaBufImportWriteProtection(context);
+        Require(dmaBuf.failure == nullptr, std::string("(u) the dma-buf import probe failed at ") + (dmaBuf.failure != nullptr ? dmaBuf.failure : "") + " (" + std::to_string(static_cast<int>(dmaBuf.result)) + ")");
+        Require(dmaBuf.writtenByCpu != 0, "(u) a CPU store into a dma-buf imported scratch range was not collected");
+        std::cout << "dma-buf import probe: " << dmaBuf.writtenAfterSubmit << " of " << dmaBuf.pages << " scratch pages written after a GPU read, " << dmaBuf.writtenAtImport << " after the import, " << dmaBuf.writtenByCpu << " after a CPU store\n";
+    } else {
+        std::cout << "dma-buf imports unavailable: the dma-buf import probe not tested\n";
+    }
     const auto decided = PrepareImportWatch(context);
     struct Restore {
         const Context& context;
@@ -2699,15 +2713,20 @@ void keysFillTests(const Device& device, Recorder& recorder) {
             }
             return true;
         };
+        const auto fill = [&](std::uint8_t key) {
+            recorder.Sync();
+            std::memset(keys, key, keyCount);
+            return StorageTexture::NoteKeysFill(keysAddress, keyCount, key);
+        };
         Require(holds({0, 0, 0, 0}), "a surface under 0000 keys was not cleared");
         draw({{1.0f, 0.0f, 0.0f, 1.0f}});
-        Require(StorageTexture::NoteKeysFill(keysAddress, keyCount, 0x00) == 1, "a 0000 key fill did not cover the surface");
+        Require(fill(0x00) == 1, "a 0000 key fill did not cover the surface");
         Require(image->FilledKeys() == DccKeys::Clear0000, "a key fill over pending results was not recorded");
         image->Refresh();
         Require(holds({0, 0, 0, 0}), "a key fill did not clear the results made before it at the next refresh");
         Require(image->FilledKeys() == DccKeys::Uncompressed, "the image cleared by a refresh still holds the fill");
         draw({{0.0f, 0.0f, 1.0f, 1.0f}});
-        Require(StorageTexture::NoteKeysFill(keysAddress, keyCount, 0x00) == 1, "a second 0000 key fill did not cover the surface");
+        Require(fill(0x00) == 1, "a second 0000 key fill did not cover the surface");
 #ifdef _WIN32
         _putenv_s("APS5_KEYS_FILL_CLEAR", "1");
 #else

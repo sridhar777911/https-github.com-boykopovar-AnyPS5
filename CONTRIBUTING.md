@@ -4,6 +4,7 @@
 
 - Follow the [coding conventions](docs/dev/CONVENTIONS.md): naming, no comments except [technical debt](docs/dev/TechnicalDebt.md), Conventional Commits.
 - Every function either does exactly what it is supposed to or throws. Unimplemented exports call `NotImplemented_nid_no_patch(__func__)` (see [libSceAudioIn](core/libs/prx/libSceAudioIn/Export.cpp)).
+- Pull requests that add or change shader instruction semantics say where they come from: measured on hardware (which GPU and what was checked, e.g. with the [hardware oracle](docs/dev/HW_ORACLE.md)) or the exact source (ISA section, LLVM, ACO or Mesa file). Reviewers check the semantics on hardware. Cases the source doesn't settle throw, and behaviour not verified on hardware is recorded in [technical debt](docs/dev/TechnicalDebt.md).
 - A silent stub is allowed only when it unblocks a title and only affects the UI; add it to [silent stubs](docs/dev/TechnicalDebt.md#silent-stubs).
 - Missing imports fail at startup with a clear error; don't replace them with fallbacks that keep running.
 - Implement the general behaviour of a function, not what one title happens to need.
@@ -24,6 +25,12 @@ ctest --test-dir build --output-on-failure
 ```
 
 Python 3 is optional; without it some relinker tests are not registered.
+
+The Conventions check runs on every pull request and fails when a rule on this page is broken. It accepts code comments only when the pull request also changes [TechnicalDebt](docs/dev/TechnicalDebt.md), and only UTF-8 text files. Run it locally before pushing:
+
+```
+python3 tools/check_conventions.py --base origin/main
+```
 
 ## Branches and pull requests
 

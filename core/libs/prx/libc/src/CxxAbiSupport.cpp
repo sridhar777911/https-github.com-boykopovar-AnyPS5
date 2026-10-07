@@ -42,14 +42,6 @@ int APS5_VABI LibcInternalExtCxaThreadAtexit_nid_postfix(void (*destructor)(void
 
 const std::error_category* _ZSt17iostream_categoryv_nid_postfix() { return &std::iostream_category(); }
 
-std::FILE* APS5_VABI _ZSt7_FiopenPKcNSt5_IosbIiE9_OpenmodeEi_nid_postfix(const char* filename, int mode, int protection) {
-    static_cast<void>(filename);
-    static_cast<void>(mode);
-    static_cast<void>(protection);
-    NotImplemented_nid_no_patch("std::_Fiopen");
-    return nullptr;
-}
-
 int APS5_VABI _ZSt13_Execute_onceRSt9once_flagPFiPvS1_PS1_ES1__nid_postfix(
     int* flag, int (APS5_VABI *callback)(void*, void*, void**), void* arg
 ) {

@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace AgcDriver {
 
@@ -32,6 +33,7 @@ public:
     ~VulkanDevice();
     VulkanDevice(const VulkanDevice&) = delete;
     VulkanDevice& operator=(const VulkanDevice&) = delete;
+    std::string DeviceName() const;
     ShaderRecompiler::SpirvTarget Target() const;
     ShaderRecompiler::SpirvTarget ComputeTarget(std::uint32_t waveSize) const;
     // Distinguishes this device from every earlier one in the process (a memo keyed by the device
@@ -158,6 +160,7 @@ public:
     void Resize(std::uint32_t width, std::uint32_t height);
     bool Presentable() const;
     bool PrimitiveListRestart() const;
+    bool SamplerFilterMinmax() const;
     // A presentation is a few steps so the presenter holds GuestMemory::GpuMutex only while it
     // touches the queue. Presentations are slots (FlipInFlight() + 1, each with its own command
     // buffer, fence, kept resident image and dump buffer): RetirePresents(keep) (no mutex) retires

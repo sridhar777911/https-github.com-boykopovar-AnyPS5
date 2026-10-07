@@ -197,6 +197,7 @@ struct SpirvTarget {
     std::optional<MeshTargetLimits> mesh;
     std::optional<TessellationTargetLimits> tessellation;
     bool nonConstantImageOffsets = false;
+    std::uint32_t srgbDecodeFormats = 0;
 };
 
 struct BindingLayout {
@@ -290,7 +291,8 @@ enum class DescriptorImageShape {
     Image2D,
     Image2DArray,
     ImageCube,
-    Image3D
+    Image3D,
+    Image1DArray
 };
 
 enum class DescriptorRole {
@@ -318,6 +320,7 @@ struct DescriptorBinding {
     std::vector<bool> imageWritten;
     std::vector<bool> imageDepthCompare;
     std::vector<bool> imageAtomic;
+    std::vector<bool> imageAtomic64;
     // Guest buffer elements the shader updates atomically (one entry per element of a GuestBuffers
     // binding, empty otherwise). An atomic on a host-imported range is a serialized PCIe round trip
     // (~0.4-0.5 us each on NVIDIA), so a driver may keep these elements in device-local memory.
@@ -328,6 +331,9 @@ struct DescriptorBinding {
     // skip the write-back and the pending-write note for the element; an element beyond the vector
     // (a producer that does not fill it) must be treated as written.
     std::vector<bool> bufferWritten;
+    std::vector<bool> samplerUnnormalized;
+    std::vector<bool> imageUnnormalized;
+    std::vector<std::uint32_t> imageSamplers;
 };
 
 struct VertexAttribute {

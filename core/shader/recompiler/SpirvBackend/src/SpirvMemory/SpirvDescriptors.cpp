@@ -12,14 +12,6 @@ namespace ShaderRecompiler
 {
 namespace {
 
-[[noreturn]] void FailEmit(const std::string& reason) {
-    throw std::runtime_error("SPIR-V module emission failed: " + reason);
-}
-
-IrShaderStage StageOf(const SpirvEmitterState& state) {
-    return state.program.Resources().stage;
-}
-
 constexpr RdnaImageDimensionInfo ImageDimensions[] = {
     {RdnaImageDimension::Dim1D, spv::Dim1D, 1, 1, 0, 0},
     {RdnaImageDimension::Dim2D, spv::Dim2D, 2, 2, 0, 0},
@@ -126,13 +118,14 @@ std::uint32_t ImageType(SpirvEmitterState& state, const ImageResource& image) {
             if (image.numericClass != IrTextureNumericClass::Uint) {
                 FailEmit("atomic storage image must be uint");
             }
-            format = spv::ImageFormatR32ui;
+            format = image.atomic64 ? spv::ImageFormatR64ui : spv::ImageFormatR32ui;
         }
     } else {
         FailEmit("invalid image resource class");
     }
     const auto& info = RdnaImageDimensionInfoFor(image.dimension);
-    return state.module.Type(spv::OpTypeImage, ImageScalarType(state, image.numericClass), info.spirvDimension, image.depthCompare ? 1u : 0u, info.arrayed, info.multisampled, sampled, format);
+    const auto scalar = image.atomic64 ? TypeScalarU64(state) : ImageScalarType(state, image.numericClass);
+    return state.module.Type(spv::OpTypeImage, scalar, info.spirvDimension, image.depthCompare ? 1u : 0u, info.arrayed, info.multisampled, sampled, format);
 }
 
 std::uint32_t ImageViewSizeType(SpirvEmitterState& state, RdnaImageDimension dimension) {

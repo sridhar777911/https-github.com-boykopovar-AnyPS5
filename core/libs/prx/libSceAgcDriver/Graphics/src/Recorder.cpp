@@ -2247,13 +2247,14 @@ void Recorder::OnComplete(std::function<void()> action) {
     writeBackCompletions.fetch_add(1, std::memory_order_acq_rel);
 }
 
-bool Recorder::noteWrite(std::uint64_t address, std::size_t bytes, bool ownLabel) {
+bool Recorder::noteWrite(std::uint64_t address, std::size_t bytes, bool ownLabel, int value) {
     CaptureTrace::Log("buffer-write batch=%llu address=%llx bytes=%zu label=%d", static_cast<unsigned long long>(submissions + 1), static_cast<unsigned long long>(address), bytes, ownLabel);
     if (bytes == 0) return false;
     ensureOpen();
     const auto end = address + bytes;
     open->writes.emplace_back(address, end);
     open->writeNotes.push_back(++writeNoteCount);
+    open->writeValues.push_back(static_cast<std::int16_t>(value));
     if (!ownLabel) markOverwritten(address, end);
     // A poller waiting on this range learns that the open batch may now hold its producer.
     if (activeRecorder == this) writeGeneration.fetch_add(1, std::memory_order_release);
@@ -2279,6 +2280,7 @@ void Recorder::noteWriteOn(Batch& batch, std::uint64_t address, std::size_t byte
     // moves as well, so a poller re-consults the label table for a completion label.
     batch.writes.emplace_back(address, address + bytes);
     batch.writeNotes.push_back(++writeNoteCount);
+    batch.writeValues.push_back(-1);
     if (!ownLabel) markOverwritten(address, address + bytes);
     if (activeRecorder == this) writeGeneration.fetch_add(1, std::memory_order_release);
     if (!SnapshotCovers(address, address + bytes)) publishPendingWrites();
@@ -2297,6 +2299,12 @@ void Recorder::NotePendingWrite(std::uint64_t address, std::size_t bytes) {
     publishPendingWrites();
     // The note precedes this thread's vkQueueSubmit and the label another queue polls for; the
     // fence makes that order hold without relying on x86 store ordering.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+}
+
+void Recorder::NotePendingFill(std::uint64_t address, std::size_t bytes, std::uint8_t value) {
+    if (!noteWrite(address, bytes, false, value)) return;
+    publishPendingWrites();
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
@@ -2385,6 +2393,20 @@ std::uint64_t Recorder::NewestWriteNote(std::uint64_t address, std::size_t bytes
     if (open != nullptr) scan(*open);
     for (const auto& batch : inFlight) scan(*batch);
     return newest;
+}
+
+std::vector<Recorder::PendingWrite> Recorder::PendingWritesOver(std::uint64_t address, std::size_t bytes) const {
+    std::vector<PendingWrite> found;
+    if (bytes == 0) return found;
+    const auto end = address + bytes;
+    const auto scan = [&](const Batch& batch) {
+        for (std::size_t i = 0; i < batch.writes.size(); ++i) {
+            if (address < batch.writes[i].second && batch.writes[i].first < end) found.push_back({batch.writes[i].first, batch.writes[i].second, batch.writeNotes[i], batch.writeValues[i]});
+        }
+    };
+    if (open != nullptr) scan(*open);
+    for (const auto& batch : inFlight) scan(*batch);
+    return found;
 }
 
 bool Recorder::ReadTracking() {

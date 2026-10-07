@@ -118,4 +118,55 @@ int APS5_VABI sceNpEntitlementAccessRequestConsumeUnifiedEntitlement(void) {
  return SCE_NP_ERROR_SIGNED_OUT;
 }
 
+
+int APS5_VABI sceNpEntitlementAccessRequestConsumeServiceEntitlement(void) {
+ return SCE_NP_ERROR_SIGNED_OUT;
+}
+
+
+int APS5_VABI sceNpEntitlementAccessPollServiceEntitlementInfo(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceNpEntitlementAccessPollUnifiedEntitlementInfo(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceNpEntitlementAccessRequestServiceEntitlementInfo(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceNpEntitlementAccessRequestUnifiedEntitlementInfo(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceNpEntitlementAccessGetPftFlag(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceNpEntitlementAccessPollServiceEntitlementInfoList() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceNpEntitlementAccessPollUnifiedEntitlementInfoList() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceNpEntitlementAccessRequestServiceEntitlementInfoList() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceNpEntitlementAccessRequestUnifiedEntitlementInfoList() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
 }

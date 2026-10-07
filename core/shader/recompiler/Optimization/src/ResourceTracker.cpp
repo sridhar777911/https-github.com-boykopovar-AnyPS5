@@ -831,9 +831,6 @@ private:
                 return i;
             }
         }
-        if (m_info.buffers.size() >= ShaderInfo::MaxBuffers) {
-            return std::numeric_limits<std::uint32_t>::max();
-        }
         BufferResource resource;
         resource.source = source;
         resource.firstUsePc = pc;
@@ -887,6 +884,11 @@ private:
         const auto access = ImageOpcodeInfoOf(op).access;
         const bool atomic = access == ImageAccess::Atomic;
         const bool write = access == ImageAccess::Write || atomic;
+        const bool atomic64 = IsImageAtomic64Opcode(op);
+        if ((image.read || image.written) && image.atomic64 != atomic64) {
+            throw std::runtime_error("an image accessed by 64-bit atomics is also accessed in another way");
+        }
+        image.atomic64 = atomic64;
         image.firstUsePc = std::min(image.firstUsePc, pc);
         image.read = image.read || !write || atomic;
         image.written = image.written || write;
@@ -982,9 +984,6 @@ private:
             }
             GetHandle(inst.Argument(0), IrOpcode::GetBufferResource, 4, handle, source);
             resource = AddBuffer(source, memory, op, flags.pc);
-            if (resource == std::numeric_limits<std::uint32_t>::max()) {
-                fail("buffer resource limit exceeded");
-            }
             AddHandlePatch(handle, resource);
             AddMemoryPatch(flags.index, resource, 0, false);
             return;

@@ -34,6 +34,8 @@ int main() {
     std::filesystem::create_directories(path.parent_path());
     { std::ofstream file("_sd_mem/u7531/slot0.bin"); file << "save"; Require(static_cast<bool>(file)); }
     Require(sceSaveDataInitialize3(nullptr) == 0);
+    Require(sceSaveDataInitialize3(nullptr) == 0);
+    Require(sceSaveDataTerminate() == 0);
     SaveDataParam param{};
     SaveDataMemorySet2 set{};
     set.user_id = 7531;

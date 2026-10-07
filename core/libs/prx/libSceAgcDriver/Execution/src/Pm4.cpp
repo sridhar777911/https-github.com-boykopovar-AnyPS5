@@ -10,7 +10,21 @@
 #include <stdexcept>
 #include <string>
 
+extern "C" void* APS5_VABI mmap_nid_postfix(void* address, std::size_t length, int protection, int flags, int descriptor, std::int64_t offset) noexcept;
+
 namespace AgcDriver::Pm4 {
+
+std::uint64_t GdsAddress() {
+    static const std::uint64_t address = [] {
+        constexpr int ReadWrite = 0x3;
+        constexpr int PrivateAnonymous = 0x1002;
+        void* mapped = mmap_nid_postfix(nullptr, GdsBytes, ReadWrite, PrivateAnonymous, -1, 0);
+        if (mapped == nullptr || mapped == reinterpret_cast<void*>(static_cast<std::uintptr_t>(-1))) throw std::runtime_error("cannot allocate the global data share");
+        return reinterpret_cast<std::uint64_t>(mapped);
+    }();
+    return address;
+}
+
 namespace {
 
 std::string ToHex(std::uint32_t value) {
@@ -99,17 +113,6 @@ std::vector<std::byte> copySource(std::uint64_t source, std::size_t bytes, bool 
 }
 
 constexpr std::uint32_t DmaSelectGds = 1;
-constexpr std::size_t GdsBytes = 0x10000;
-
-struct GdsStorage {
-    std::mutex mutex;
-    std::array<std::byte, GdsBytes> bytes{};
-};
-
-GdsStorage& Gds() {
-    static GdsStorage storage;
-    return storage;
-}
 
 bool gdsRange(std::uint64_t offset, std::size_t bytes) {
     return offset <= GdsBytes && bytes <= GdsBytes - offset;
@@ -118,9 +121,7 @@ bool gdsRange(std::uint64_t offset, std::size_t bytes) {
 std::vector<std::byte> dmaSourceBytes(std::span<const std::uint32_t> packet) {
     const std::size_t bytes = packet[6] & 0x3ffffffu;
     if (dmaSource(packet) != DmaSelectGds) return copySource(address(packet[2], packet[3]), bytes, dmaSource(packet) == 2);
-    auto& gds = Gds();
-    std::lock_guard lock(gds.mutex);
-    return {gds.bytes.begin() + packet[2], gds.bytes.begin() + packet[2] + bytes};
+    return copySource(GdsAddress() + packet[2], bytes, false);
 }
 
 void copyMemory(std::uint64_t source, std::uint64_t destination, std::size_t bytes, bool immediate) {
@@ -167,7 +168,7 @@ std::string_view UnsupportedReason(std::uint32_t header) {
     }
     switch (opcode) {
         case 0x11: case 0x12: case 0x13: case 0x15: case 0x16: case 0x20: case 0x22: case 0x26: case 0x27:
-        case 0x2a: case 0x2d: case 0x2f: case 0x35: case 0x37: case 0x40: case 0x42: case 0x46: case 0x50:
+        case 0x2a: case 0x2d: case 0x2f: case 0x35: case 0x37: case 0x40: case 0x42: case 0x45: case 0x46: case 0x50:
         case 0x58: case 0x63: case 0x64: case 0x69: case 0x76: case 0x79: case 0x7a:
         case 0x81: case 0x83: case 0x9f: return {};
         case 0x24: case 0x25: case 0x2c: case 0x38:
@@ -382,6 +383,15 @@ void Validate(std::span<const std::uint32_t> packet, std::uint32_t queue) {
             require((packet[2] & (opcode == 0x3c ? 3u : 7u)) == 0, "misaligned WAIT_REG_MEM address");
             break;
         }
+        case 0x45: {
+            size(9);
+            require((packet[1] & ~0x317u) == 0, "COND_WRITE reserved fields are not implemented");
+            require((packet[1] & 0x10u) != 0, "register-space COND_WRITE poll is not implemented");
+            require((packet[1] & 7u) <= 6u, "invalid COND_WRITE compare function");
+            require(((packet[1] >> 8u) & 3u) == 1u, "register or scratch COND_WRITE destination is not implemented");
+            require((packet[2] & 3u) == 0 && (packet[6] & 3u) == 0, "misaligned COND_WRITE address");
+            break;
+        }
         case 0x49: {
             size(8);
             const auto dataSelect = packet[2] >> 29u;
@@ -579,7 +589,7 @@ bool UsesGpuCacheBarrier(std::span<const std::uint32_t> packet) {
 
 bool AccessesMemory(std::uint32_t header) {
     switch ((header >> 8u) & 0xffu) {
-        case 0x22: case 0x27: case 0x3c: case 0x93: case 0x49: case 0x16: case 0x2d: case 0x35: case 0x24: case 0x25: case 0x2c: case 0x38: case 0x37: case 0x40: case 0x50: case 0x63: case 0x64: case 0x83: case 0x9f: return true;
+        case 0x22: case 0x27: case 0x3c: case 0x93: case 0x49: case 0x16: case 0x2d: case 0x35: case 0x24: case 0x25: case 0x2c: case 0x38: case 0x37: case 0x40: case 0x45: case 0x50: case 0x63: case 0x64: case 0x83: case 0x9f: return true;
         default: return false;
     }
 }
@@ -808,6 +818,15 @@ void Execute(std::span<const std::uint32_t> packet, QueueState& queue) {
         case 0x83:
             GuestMemory::Write(address(packet[3], packet[4]), std::as_bytes(std::span(queue.constantRam).subspan(packet[1] / 4, packet[2])), 4);
             return;
+        case 0x45: {
+            std::uint32_t value = 0;
+            {
+                const GuestMemory::ReadSiteScope site(GuestMemory::ReadSite::Wait);
+                GuestMemory::Read(address(packet[2], packet[3]), std::as_writable_bytes(std::span(&value, 1)), 4);
+            }
+            if (waitCompares(packet, false, value)) GuestMemory::Write(address(packet[6], packet[7]), std::as_bytes(packet.subspan(8, 1)), 4);
+            return;
+        }
         case 0x37: {
             const auto destination = address(packet[2], packet[3]);
             if ((packet[1] & 0x10000u) != 0) {
@@ -824,13 +843,7 @@ void Execute(std::span<const std::uint32_t> packet, QueueState& queue) {
             const std::size_t bytes = packet[6] & 0x3ffffffu;
             if (bytes == 0) return;
             auto data = dmaSourceBytes(packet);
-            if (dmaDestination(packet) == DmaSelectGds) {
-                auto& gds = Gds();
-                std::lock_guard lock(gds.mutex);
-                std::copy(data.begin(), data.end(), gds.bytes.begin() + packet[4]);
-                return;
-            }
-            const auto destination = address(packet[4], packet[5]);
+            const auto destination = dmaDestination(packet) == DmaSelectGds ? GdsAddress() + packet[4] : address(packet[4], packet[5]);
             GuestMemory::CheckRange(reinterpret_cast<void*>(destination), bytes, 1, true);
             GuestMemory::Write(destination, data);
             return;

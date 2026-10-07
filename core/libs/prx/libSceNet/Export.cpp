@@ -27,6 +27,7 @@
 #include <new>
 #include <vector>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
@@ -37,6 +38,7 @@ namespace {
 // FreeBSD errno numbers as reported through sceNetErrnoLoc (SCE_NET_ERROR_* is 0x80410100 + errno).
 constexpr int NET_ENOENT = 2;
 constexpr int NET_EBADF = 9;
+constexpr int NET_EFAULT = 14;
 constexpr int NET_EINVAL = 22;
 constexpr int NET_ENOSPC = 28;
 constexpr int NET_EAGAIN = 35;
@@ -62,6 +64,9 @@ constexpr int NET_SOL_SOCKET = 0xFFFF;
 constexpr int NET_SO_SNDTIMEO = 0x1005;
 constexpr int NET_SO_RCVTIMEO = 0x1006;
 constexpr int NET_SO_NBIO = 0x1200;
+constexpr int NET_MSG_PEEK = 0x2;
+constexpr int NET_MSG_TRUNC = 0x10;
+constexpr int NET_UIO_MAXIOV = 1024;
 
 #ifdef _WIN32
 using NativeSocket = SOCKET;
@@ -245,6 +250,37 @@ std::uint32_t swap32(std::uint32_t v) {
 std::uint64_t swap64(std::uint64_t v) {
     return (v << 56) | ((v & 0xFF00u) << 40) | ((v & 0xFF0000u) << 24) | ((v & 0xFF000000u) << 8) |
         ((v >> 8) & 0xFF000000u) | ((v >> 24) & 0xFF0000u) | ((v >> 40) & 0xFF00u) | (v >> 56);
+}
+
+struct NetIovec {
+    void* base;
+    std::uint64_t length;
+};
+
+struct NetMsghdr {
+    void* name;
+    std::uint32_t name_length;
+    NetIovec* iov;
+    int iov_length;
+    void* control;
+    std::uint32_t control_length;
+    int flags;
+};
+static_assert(sizeof(NetMsghdr) == 48 && offsetof(NetMsghdr, iov) == 16 && offsetof(NetMsghdr, control) == 32 &&
+    offsetof(NetMsghdr, flags) == 44);
+
+std::int64_t message_length(const NetMsghdr* message) {
+    if (!message) return fail(NET_EFAULT);
+    if (message->iov_length < 0 || message->iov_length > NET_UIO_MAXIOV) return fail(NET_EMSGSIZE);
+    if (message->iov_length && !message->iov) return fail(NET_EFAULT);
+    std::uint64_t total = 0;
+    for (int i = 0; i < message->iov_length; ++i) {
+        const auto& entry = message->iov[i];
+        if (!entry.base && entry.length) return fail(NET_EFAULT);
+        if (entry.length > INT_MAX - total) return fail(NET_EINVAL);
+        total += entry.length;
+    }
+    return static_cast<std::int64_t>(total);
 }
 
 }  // namespace
@@ -523,6 +559,70 @@ int64_t APS5_VABI sceNetSendto(int s, const void* buf, size_t len, int flags, co
             reinterpret_cast<const sockaddr*>(&destination), destination_length);
     }
     return result >= 0 ? result : fail(native_error());
+}
+
+int64_t APS5_VABI sceNetSendmsg(int s, const NetMsghdr* msg, int flags) {
+    const auto total = message_length(msg);
+    if (total < 0) return total;
+    if (msg->control && msg->control_length) throw std::runtime_error("sceNetSendmsg: control data is not supported");
+    std::vector<char> buffer;
+    try {
+        buffer.resize(static_cast<std::size_t>(total));
+    } catch (const std::bad_alloc&) {
+        return fail(55);
+    }
+    std::size_t offset = 0;
+    for (int i = 0; i < msg->iov_length; ++i) {
+        if (msg->iov[i].length) std::memcpy(buffer.data() + offset, msg->iov[i].base, msg->iov[i].length);
+        offset += msg->iov[i].length;
+    }
+    return sceNetSendto(s, buffer.data(), buffer.size(), flags, msg->name, msg->name ? msg->name_length : 0u);
+}
+
+int64_t APS5_VABI sceNetRecvmsg(int s, NetMsghdr* msg, int flags) {
+    const auto total = message_length(msg);
+    if (total < 0) return total;
+    if (flags != 0 && flags != NET_MSG_PEEK) return fail(NET_EOPNOTSUPP);
+    Sock socket;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        auto it = g_socks.find(s);
+        if (it == g_socks.end()) return fail(NET_EBADF);
+        socket = it->second;
+    }
+    const bool datagram = socket.type != NET_SOCK_STREAM;
+    std::vector<char> buffer;
+    try {
+        buffer.resize(static_cast<std::size_t>(total) + (datagram ? 1u : 0u));
+    } catch (const std::bad_alloc&) {
+        return fail(55);
+    }
+    sockaddr_storage peer{};
+    NativeLength peer_length = sizeof(peer);
+    std::int64_t received = ::recvfrom(socket.native->value, buffer.data(), static_cast<int>(buffer.size()),
+        flags == NET_MSG_PEEK ? MSG_PEEK : 0, reinterpret_cast<sockaddr*>(&peer), &peer_length);
+    if (received < 0) {
+#ifdef _WIN32
+        if (!datagram || WSAGetLastError() != WSAEMSGSIZE) return fail(native_error());
+        received = static_cast<std::int64_t>(buffer.size());
+#else
+        return fail(native_error());
+#endif
+    }
+    msg->flags = 0;
+    if (received > total) {
+        received = total;
+        msg->flags = NET_MSG_TRUNC;
+    }
+    std::size_t offset = 0;
+    for (int i = 0; i < msg->iov_length && offset < static_cast<std::size_t>(received); ++i) {
+        const auto count = std::min<std::size_t>(msg->iov[i].length, static_cast<std::size_t>(received) - offset);
+        std::memcpy(msg->iov[i].base, buffer.data() + offset, count);
+        offset += count;
+    }
+    if (msg->name && !native_to_guest_address(peer, msg->name, &msg->name_length)) msg->name_length = 0;
+    msg->control_length = 0;
+    return received;
 }
 
 int APS5_VABI sceNetShutdown(int s, int how) {
@@ -945,6 +1045,16 @@ int APS5_VABI sceNetResolverGetError(int rid, int* status) {
     const auto resolver = g_resolvers.find(rid);
     if (resolver == g_resolvers.end()) return fail(NET_EBADF);
     *status = resolver->second;
+    return 0;
+}
+
+int APS5_VABI sceNetResolverAbort(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceNetResolverStartNtoaMultipleRecords() {
+    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 

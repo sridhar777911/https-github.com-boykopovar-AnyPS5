@@ -42,6 +42,29 @@ bool TranslationContext::dsAtomic(const RdnaInstruction& inst, IrOpcode opcode, 
     return true;
 }
 
+bool TranslationContext::dsWrxchg2(const RdnaInstruction& inst) {
+    MemoryInfo first = sharedMemoryInfoFromInstruction(inst);
+    const std::uint32_t width = first.dataDwords / 2u;
+    if (width == 2u && inst.gds) {
+        throw std::runtime_error("64-bit GDS atomics are not supported");
+    }
+    first.dataDwords = width;
+    first.componentCount = width;
+    MemoryInfo second = first;
+    second.offset = first.secondaryOffset;
+    const IrU32 address = readU32(inst.source0);
+    const auto data = [&](const RdnaOperand& operand) { return width == 2u ? &readU64(operand).Value() : &readU32(operand).Value(); };
+    IrValue* firstValue = data(inst.source1);
+    IrValue* secondValue = data(inst.source2);
+    IrValue& active = ir.GetExec();
+    const IrOpcode opcode = width == 2u ? IrOpcode::SharedAtomicSwap64 : IrOpcode::SharedAtomicSwap32;
+    IrValue& firstOld = ir.Emit(opcode, IrOpcodeType(opcode), {&address.Value(), firstValue, &active}, addMemoryInfo(first, inst.programCounter));
+    IrValue& secondOld = ir.Emit(opcode, IrOpcodeType(opcode), {&address.Value(), secondValue, &active}, addMemoryInfo(second, inst.programCounter));
+    writeOperand(inst.destination, &firstOld);
+    writeOperand(offsetOperand(inst.destination, width), &secondOld);
+    return true;
+}
+
 IrValue* TranslationContext::loadSharedU32(std::uint32_t width, IrU32 address, const MemoryInfo& memory, std::uint32_t pc) {
     IrOpcode opcode;
     switch (width) {

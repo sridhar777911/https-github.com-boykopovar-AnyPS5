@@ -103,6 +103,7 @@ public:
     void KeepDrawSnapshot(std::uint64_t address, std::size_t bytes, std::uint64_t generation, std::uint64_t registryGeneration, std::shared_ptr<Buffer> buffer, SnapshotUse use = SnapshotUse::Storage, std::uint32_t derived = 0);
     void OnComplete(std::function<void()> action);
     void NotePendingWrite(std::uint64_t address, std::size_t bytes);
+    void NotePendingFill(std::uint64_t address, std::size_t bytes, std::uint8_t value);
     // Notes several [begin, end) ranges and publishes the snapshot once (a dispatch writes many buffers).
     void NotePendingWrites(std::span<const std::pair<std::uint64_t, std::uint64_t>> ranges);
     bool PendingWriteOverlaps(std::uint64_t address, std::size_t bytes) const;
@@ -112,6 +113,13 @@ public:
     bool PendingWriteSettled(std::uint64_t address, std::size_t bytes) const;
     std::uint64_t LastWriteNote(std::uint64_t address, std::size_t bytes) const;
     std::uint64_t NewestWriteNote(std::uint64_t address, std::size_t bytes) const;
+    struct PendingWrite {
+        std::uint64_t begin;
+        std::uint64_t end;
+        std::uint64_t note;
+        int value;
+    };
+    std::vector<PendingWrite> PendingWritesOver(std::uint64_t address, std::size_t bytes) const;
     // Batch read tracking: the guest ranges the recorded work reads IN PLACE through a host import
     // and the GPU has not executed yet (a V# element bound in place, a region the GPU copies out of
     // an import, an address-based build's leased heaps, indirect arguments, a GPU-direct storage
@@ -494,6 +502,7 @@ private:
         std::vector<std::function<void()>> completions;
         std::vector<std::pair<std::uint64_t, std::uint64_t>> writes;
         std::vector<std::uint64_t> writeNotes;
+        std::vector<std::int16_t> writeValues;
         // In-place reads (see NotePendingRead), dying with the batch: a finished batch's reads are done.
         struct Read {
             std::uint64_t begin;
@@ -687,7 +696,7 @@ private:
     // Appends one range to the open batch; returns whether the snapshot must be rebuilt for it.
     // `ownLabel`: the range is a label's own store (NoteLabel, AfterCompletions), which does not
     // overwrite the table entries it covers; any other range flags them (table mutex, briefly).
-    bool noteWrite(std::uint64_t address, std::size_t bytes, bool ownLabel = false);
+    bool noteWrite(std::uint64_t address, std::size_t bytes, bool ownLabel = false, int value = -1);
     // Appends one range to `batch` (open or in flight) and publishes the snapshot if needed.
     void noteWriteOn(Batch& batch, std::uint64_t address, std::size_t bytes, bool ownLabel = false);
     void noteLabelOn(Batch& batch, std::uint64_t address, std::span<const std::byte> bytes, std::uint64_t stamp, std::uint32_t queue, bool behindCompletion = false);

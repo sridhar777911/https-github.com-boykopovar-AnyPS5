@@ -11,7 +11,7 @@ namespace ShaderRecompiler {
 inline constexpr std::uint32_t FirstImageBinding = 1u;
 inline constexpr std::uint32_t FirstComparisonImageBinding = 22u;
 inline constexpr std::uint32_t FirstStorageImageBinding = 29u;
-inline constexpr std::uint32_t ImageBindingCount = 43u;
+inline constexpr std::uint32_t ImageBindingCount = 48u;
 
 enum class DescriptorBindingKind : std::uint32_t {
     Buffers = 0u,

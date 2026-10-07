@@ -35,7 +35,8 @@ constexpr int user = 0x10000000;
 void TestSet3DLatency() {
     Require(sceAudioOut2Set3DLatency(systemUser, 2) == 0, "latency 2 for the system user must be accepted");
     Require(sceAudioOut2Set3DLatency(systemUser, 2) == 0, "latency 2 must be accepted again");
-    Require(ThrowsRuntimeError([] { sceAudioOut2Set3DLatency(systemUser, 1); }), "latency 1 must throw");
+    Require(sceAudioOut2Set3DLatency(systemUser, 1) == 0, "latency 1 for the system user must be accepted");
+    Require(ThrowsRuntimeError([] { sceAudioOut2Set3DLatency(systemUser, 0); }), "latency 0 must throw");
     Require(ThrowsRuntimeError([] { sceAudioOut2Set3DLatency(systemUser, 3); }), "latency 3 must throw");
     Require(ThrowsRuntimeError([] { sceAudioOut2Set3DLatency(user, 2); }), "a user other than the system user must throw");
 }

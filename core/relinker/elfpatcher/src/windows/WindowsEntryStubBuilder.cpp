@@ -5,6 +5,7 @@
 #include <io/BufferUtils.hpp>
 #include <algorithm>
 #include <optional>
+#include <filesystem>
 
 namespace Elfpatcher::Windows {
 
@@ -85,6 +86,35 @@ WindowsEntryStub WindowsEntryStubBuilder::Build(const std::uint32_t dataRva, con
     for (const auto& import : imports)
         symbolNames.push_back(addString(import.Name));
 
+    std::vector<std::uint32_t> searchTables;
+    std::vector<std::uint32_t> searchCounts;
+    std::vector<bool> platformTlsResolvers;
+    for (const auto& import : imports) {
+        std::vector<std::uint32_t> order;
+        for (std::size_t index = 0; index < libraries.size(); ++index) {
+            auto name = std::filesystem::path(libraries[index]).filename().string();
+            if (name.ends_with(".guest.prx")) name.resize(name.size() - 10);
+            const bool guestName = index < guestModules.size() &&
+                std::find(guestModules[index].Names.begin(), guestModules[index].Names.end(), import.Library) != guestModules[index].Names.end();
+            if (import.Library.empty() || name == import.Library || guestName) order.push_back(CheckedRva(index));
+        }
+        if (order.empty()) throw Domain::RelinkerException("Import module is not a dependency: " + import.Library);
+        const bool hostModule = !import.Library.empty() &&
+            std::any_of(order.begin(), order.end(), [&](auto index) { return index >= guestModules.size(); });
+        if (hostModule) {
+            for (std::size_t index = guestModules.size(); index < libraries.size(); ++index) {
+                if (libraries[index] == "libc.prx" && import.Library != "libc.prx") order.push_back(CheckedRva(index));
+            }
+        }
+        Io::AlignBuffer(data, 4);
+        platformTlsResolvers.push_back(std::none_of(order.begin(), order.end(), [&](auto index) {
+            return index < guestModules.size() && !guestModules[index].UsePlatformTlsResolver;
+        }));
+        searchTables.push_back(CheckedRva(dataRva + data.size()));
+        searchCounts.push_back(CheckedRva(order.size()));
+        for (const auto index : order) Io::AppendU32(data, index);
+    }
+
     const auto lastError = reserve(4);
     const auto errorDigits = reserve(11);
     const auto errorMessage = reserve(ErrorMessageCapacity);
@@ -105,7 +135,8 @@ WindowsEntryStub WindowsEntryStubBuilder::Build(const std::uint32_t dataRva, con
     const auto diagnosticsOffset = data.size();
     std::vector<std::string> errors = {"FAIL: cannot obtain executable path\n", "FAIL: executable or library path is too long\n", "FAIL: executable path has no directory\n"};
     for (const auto& import : imports)
-        errors.push_back("FAIL: unresolved ELF import " + import.Name + "\n");
+        errors.push_back("FAIL: unresolved ELF import " + import.Name +
+            (import.Library.empty() ? std::string{} : " from " + import.Library) + "\n");
     const auto argumentError = errors.size();
     errors.push_back("FAIL: cannot prepare command-line arguments\n");
     std::vector<std::uint32_t> errorRvas;
@@ -291,7 +322,7 @@ WindowsEntryStub WindowsEntryStubBuilder::Build(const std::uint32_t dataRva, con
     std::vector<std::size_t> lazyUnresolvedImports;
     std::vector<std::size_t> tlsResolverAddresses;
     for (std::size_t index = 0; index < imports.size(); ++index) {
-        if (!guestModules.empty() && guestModules.front().UsePlatformTlsResolver && imports[index].Name == "vNe1w4diLCs") {
+        if (!guestModules.empty() && platformTlsResolvers[index] && imports[index].Name == "vNe1w4diLCs") {
             if (imports[index].Addend != 0) throw Domain::RelinkerException("TLS resolver import has an addend");
             tlsResolverAddresses.push_back(code.Branch({0x48, 0x8d, 0x05}));
             guestStartup.WriteImport(code, imports[index], handles);
@@ -299,14 +330,15 @@ WindowsEntryStub WindowsEntryStubBuilder::Build(const std::uint32_t dataRva, con
         }
         code.Rip({0x48, 0x8d, 0x1d}, handles);
         code.Rip({0x48, 0x8d, 0x35}, symbolNames[index]);
+        code.Rip({0x48, 0x8d, 0x3d}, searchTables[index]);
         code.Emit({0xbd});
-        code.U32(CheckedRva(libraries.size()));
+        code.U32(searchCounts[index]);
         const auto search = code.GetRva();
-        code.Emit({0x48, 0x8b, 0x0b, 0x48, 0x89, 0xf2});
+        code.Emit({0x8b, 0x0f, 0x48, 0x8b, 0x0c, 0xcb, 0x48, 0x89, 0xf2});
         call("GetProcAddress");
         code.Emit({0x48, 0x85, 0xc0});
         const auto resolved = code.Branch({0x0f, 0x85});
-        code.Emit({0x48, 0x83, 0xc3, 8, 0xff, 0xcd});
+        code.Emit({0x48, 0x83, 0xc7, 4, 0xff, 0xcd});
         code.Rip({0x0f, 0x85}, search);
         if (lazyBinding) {
             lazyUnresolvedImports.push_back(index);

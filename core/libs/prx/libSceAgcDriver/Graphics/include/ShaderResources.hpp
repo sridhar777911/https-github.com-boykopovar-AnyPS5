@@ -326,7 +326,7 @@ private:
     // Stage B: the record's texture when the fastRevalidate predicate proves it current under the
     // lock and the cache still holds it; null sends the element to cachedTexture.
     std::shared_ptr<Texture> fastTexture(const ImageRecord& record);
-    void resolveImageBinding(const ShaderRecompiler::DescriptorBinding& binding, Binding& item);
+    void resolveImageBinding(const ShaderRecompiler::DescriptorBinding& binding, Binding& item, std::span<const std::shared_ptr<Sampler>> shaderSamplers);
     void forgetDeferredInputs();
     void release() noexcept;
     void prepareAddressBindings(std::span<const CompiledShader> shaders, std::span<const GuestMemorySnapshot> snapshots);
@@ -412,6 +412,7 @@ private:
     std::vector<bool> storageFirstLayer;
     std::vector<bool> storageWritten;
     std::vector<bool> storageAtomic;
+    std::vector<bool> storageAtomic64;
     std::vector<std::shared_ptr<Sampler>> samplers;
     bool reusable = false;
     std::vector<DirectRegion> directRegions;
@@ -436,6 +437,8 @@ private:
     struct DeferredImages {
         const ShaderRecompiler::DescriptorBinding* binding;
         std::size_t index;
+        std::size_t firstSampler = 0;
+        std::size_t samplerCount = 0;
     };
     std::vector<DeferredImages> deferredImages;
     std::uint64_t storageBuffers = 0;
