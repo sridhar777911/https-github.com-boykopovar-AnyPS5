@@ -52,9 +52,24 @@ struct NetMsghdr {
     int flags;
 };
 
+struct GuestResolverAddress {
+    std::uint32_t address;
+    std::uint8_t address6[12];
+    std::uint32_t af;
+    std::uint32_t reserved[3];
+};
+
+struct GuestResolverRecords {
+    GuestResolverAddress addrs[10];
+    std::uint32_t records;
+    std::uint32_t recordsv4;
+    std::uint32_t reserved[14];
+};
+
 extern "C" {
 std::int64_t APS5_VABI sceNetSendmsg(int, const NetMsghdr*, int);
 std::int64_t APS5_VABI sceNetRecvmsg(int, NetMsghdr*, int);
+int APS5_VABI sceNetResolverStartNtoaMultipleRecords(int, const char*, GuestResolverRecords*, int, int, int);
 }
 
 static void Require(bool condition) {
@@ -241,8 +256,28 @@ int main() {
     Require(sceNetResolverStartNtoa(resolver, "localhost", ipv4.data(), 5000000, 1, 0) == 0);
     Require(ipv4[0] == 127);
     Require(sceNetResolverGetError(resolver, &resolver_error) == 0 && resolver_error == 0);
+    GuestResolverRecords multiple{};
+    Require(sceNetResolverStartNtoaMultipleRecords(resolver, "localhost", &multiple, 5000000, 1, 0) == 0);
+    Require(multiple.records >= 1 && multiple.records <= 10 && multiple.recordsv4 == multiple.records);
+    Require(multiple.addrs[0].af == 2 && (multiple.addrs[0].address & 0xffu) == 127);
+    for (std::uint32_t i = 1; i < multiple.records; ++i) {
+        Require(multiple.addrs[i].af == 2 && multiple.addrs[i].address != 0);
+    }
+    Require(sceNetResolverGetError(resolver, &resolver_error) == 0 && resolver_error == 0);
+    Require(sceNetResolverStartNtoaMultipleRecords(resolver, nullptr, &multiple, 5000000, 1, 0) ==
+        static_cast<int>(0x80410116) && *sceNetErrnoLoc() == 22);
+    Require(sceNetResolverStartNtoaMultipleRecords(resolver, "localhost", nullptr, 5000000, 1, 0) ==
+        static_cast<int>(0x80410116) && *sceNetErrnoLoc() == 22);
+    Require(sceNetResolverStartNtoaMultipleRecords(resolver, "", &multiple, 5000000, 1, 0) ==
+        static_cast<int>(0x80410116) && *sceNetErrnoLoc() == 22);
+    Require(sceNetResolverStartNtoaMultipleRecords(resolver, "guest-sce-net.invalid", &multiple, 5000000, 1, 0) ==
+        static_cast<int>(0x804101E1));
+    Require(sceNetResolverGetError(resolver, &resolver_error) == 0 &&
+        resolver_error == static_cast<int>(0x804101E1));
     Require(sceNetResolverGetError(resolver, nullptr) == static_cast<int>(0x80410116) && *sceNetErrnoLoc() == 22);
     Require(sceNetResolverDestroy(resolver) == 0);
+    Require(sceNetResolverStartNtoaMultipleRecords(resolver, "localhost", &multiple, 5000000, 1, 0) ==
+        static_cast<int>(0x80410109) && *sceNetErrnoLoc() == 9);
     resolver_error = -1;
     Require(sceNetResolverGetError(resolver, &resolver_error) == static_cast<int>(0x80410109) &&
         *sceNetErrnoLoc() == 9 && resolver_error == -1);

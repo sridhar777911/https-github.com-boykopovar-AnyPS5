@@ -269,6 +269,22 @@ struct NetMsghdr {
 static_assert(sizeof(NetMsghdr) == 48 && offsetof(NetMsghdr, iov) == 16 && offsetof(NetMsghdr, control) == 32 &&
     offsetof(NetMsghdr, flags) == 44);
 
+struct NetResolverAddress {
+    std::uint32_t address;
+    std::uint8_t address6[12];
+    std::uint32_t af;
+    std::uint32_t reserved[3];
+};
+
+struct NetResolverRecords {
+    NetResolverAddress addrs[10];
+    std::uint32_t records;
+    std::uint32_t recordsv4;
+    std::uint32_t reserved[14];
+};
+static_assert(sizeof(NetResolverAddress) == 32 && sizeof(NetResolverRecords) == 384 &&
+    offsetof(NetResolverRecords, records) == 320 && offsetof(NetResolverRecords, recordsv4) == 324);
+
 std::int64_t message_length(const NetMsghdr* message) {
     if (!message) return fail(NET_EFAULT);
     if (message->iov_length < 0 || message->iov_length > NET_UIO_MAXIOV) return fail(NET_EMSGSIZE);
@@ -1053,8 +1069,47 @@ int APS5_VABI sceNetResolverAbort(void) {
     return 0;
 }
 
-int APS5_VABI sceNetResolverStartNtoaMultipleRecords() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceNetResolverStartNtoaMultipleRecords(int rid, const char* hostname, NetResolverRecords* records,
+    int timeout, int retry, int flags) {
+    (void)timeout;
+    (void)retry;
+    (void)flags;
+    if (!hostname || !records) return fail(NET_EINVAL);
+    std::size_t length = 0;
+    while (length <= 255 && hostname[length] != '\0') ++length;
+    if (length == 0 || length > 255) return fail(NET_EINVAL);
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (g_resolvers.count(rid) == 0) return fail(NET_EBADF);
+    }
+    if (!initialize_sockets()) return fail(5);
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* results = nullptr;
+    const int result = ::getaddrinfo(hostname, nullptr, &hints, &results);
+    if (result != 0) {
+        *errno_slot() = result == EAI_AGAIN ? NET_ETIMEDOUT : NET_ENOENT;
+        log_soft(__func__, "host DNS lookup failed");
+        set_resolver_error(rid, NET_ERROR_RESOLVER_ENODNS);
+        return NET_ERROR_RESOLVER_ENODNS;
+    }
+    std::memset(records, 0, sizeof(*records));
+    std::uint32_t count = 0;
+    for (const addrinfo* entry = results; entry != nullptr && count < 10; entry = entry->ai_next) {
+        if (entry->ai_family != AF_INET || entry->ai_addr == nullptr) continue;
+        const auto address = reinterpret_cast<const sockaddr_in*>(entry->ai_addr)->sin_addr.s_addr;
+        bool seen = false;
+        for (std::uint32_t i = 0; i < count; ++i) seen = seen || records->addrs[i].address == address;
+        if (seen) continue;
+        records->addrs[count].address = static_cast<std::uint32_t>(address);
+        records->addrs[count].af = NET_AF_INET;
+        ++count;
+    }
+    ::freeaddrinfo(results);
+    records->records = count;
+    records->recordsv4 = count;
+    set_resolver_error(rid, 0);
     return 0;
 }
 
