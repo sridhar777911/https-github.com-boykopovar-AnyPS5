@@ -13,6 +13,7 @@
 
 #include "SDL.h"
 #include "SceTypes.hpp"
+#include "prx/libc/include/PreciseWait.hpp"
 #include "prx/libkernel/Time/include/Time.hpp"
 
 static constexpr int PORT_TYPE_MAIN = 0;
@@ -198,10 +199,7 @@ static void queueAudio(Port& port, const void* data) {
                 SDL_ClearQueuedAudio(port.device);
                 break;
             }
-            struct timespec req{};
-            req.tv_sec = 0;
-            req.tv_nsec = static_cast<long>(DRAIN_SLEEP_US * 1000ULL);
-            nanosleep(&req, nullptr);
+            PreciseSleepUs(DRAIN_SLEEP_US);
         }
         return;
     }
@@ -251,10 +249,7 @@ static void queueAudio(Port& port, const void* data) {
             SDL_ClearQueuedAudio(port.device);
             break;
         }
-        struct timespec req{};
-        req.tv_sec = 0;
-        req.tv_nsec = static_cast<long>(DRAIN_SLEEP_US * 1000ULL);
-        nanosleep(&req, nullptr);
+        PreciseSleepUs(DRAIN_SLEEP_US);
     }
 
     if (SDL_QueueAudio(port.device, queueData, queueSize) < 0) {
@@ -263,22 +258,15 @@ static void queueAudio(Port& port, const void* data) {
     // APS5_LOG_OUT("device=%u type=%d bytes=%u queued=%u", port.device, port.type, queueSize, SDL_GetQueuedAudioSize(port.device));
 }
 
-static void sleepUs(std::uint64_t us) {
-    struct timespec req{};
-    req.tv_sec = static_cast<time_t>(us / 1000000ULL);
-    req.tv_nsec = static_cast<long>((us % 1000000ULL) * 1000ULL);
-    nanosleep(&req, nullptr);
-}
-
 static void paceVirtualPort(Port& port, bool hasData) {
     const std::uint64_t now = sceKernelGetProcessTime();
     const auto queued = static_cast<std::int64_t>(port.virtualQueueEnd - now);
     if (queued <= 0) port.virtualQueueEnd = now;
     if (!hasData) {
-        if (queued > 0) sleepUs(static_cast<std::uint64_t>(queued));
+        if (queued > 0) PreciseSleepUs(static_cast<std::uint64_t>(queued));
         return;
     }
-    if (queued > static_cast<std::int64_t>(TARGET_LATENCY_US)) sleepUs(static_cast<std::uint64_t>(queued) - TARGET_LATENCY_US);
+    if (queued > static_cast<std::int64_t>(TARGET_LATENCY_US)) PreciseSleepUs(static_cast<std::uint64_t>(queued) - TARGET_LATENCY_US);
     port.virtualQueueEnd += (1000000ULL * port.samplesNum) / port.freq;
 }
 
