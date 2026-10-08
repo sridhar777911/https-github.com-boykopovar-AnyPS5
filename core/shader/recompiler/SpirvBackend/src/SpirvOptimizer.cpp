@@ -11,6 +11,7 @@ namespace ShaderRecompiler {
 namespace {
 
 bool HasLimitedUseTypes(std::span<const std::uint32_t> spirv) {
+    if (spirv.size() < 5) throw std::runtime_error("SPIRV-Tools: incomplete module header");
     bool int8 = false, int16 = false, float16 = false;
     bool int8Capability = false, int16Capability = false, float16Capability = false;
     const bool swapped = spirv[0] != spv::MagicNumber;
@@ -20,8 +21,18 @@ bool HasLimitedUseTypes(std::span<const std::uint32_t> spirv) {
                              ((word << 8u) & 0x00ff0000u) | (word << 24u)
                        : word;
     };
-    for (std::size_t offset = 5; offset < spirv.size(); offset += wordAt(offset) >> 16u) {
-        switch (wordAt(offset) & 0xffffu) {
+    if (wordAt(0) != spv::MagicNumber) throw std::runtime_error("SPIRV-Tools: invalid module magic");
+    for (std::size_t offset = 5; offset < spirv.size();) {
+        const auto instruction = wordAt(offset);
+        const auto wordCount = instruction >> spv::WordCountShift;
+        const auto opcode = instruction & spv::OpCodeMask;
+        if (wordCount == 0 || wordCount > spirv.size() - offset ||
+            (opcode == spv::OpCapability && wordCount < 2) ||
+            (opcode == spv::OpTypeInt && wordCount < 4) ||
+            (opcode == spv::OpTypeFloat && wordCount < 3)) {
+            throw std::runtime_error("SPIRV-Tools: malformed instruction while scanning narrow types");
+        }
+        switch (opcode) {
         case spv::OpCapability:
             int8Capability |= wordAt(offset + 1) == spv::CapabilityInt8 ||
                               wordAt(offset + 1) == spv::CapabilityDotProductInput4x8Bit;
@@ -33,11 +44,12 @@ bool HasLimitedUseTypes(std::span<const std::uint32_t> spirv) {
             int16 |= wordAt(offset + 2) == 16;
             break;
         case spv::OpTypeFloat:
-            float16 |= (wordAt(offset) >> 16u) == 3 && wordAt(offset + 2) == 16;
+            float16 |= wordCount == 3 && wordAt(offset + 2) == 16;
             break;
         case spv::OpFunction:
             return (int8 && !int8Capability) || (int16 && !int16Capability) || (float16 && !float16Capability);
         }
+        offset += wordCount;
     }
     return (int8 && !int8Capability) || (int16 && !int16Capability) || (float16 && !float16Capability);
 }
