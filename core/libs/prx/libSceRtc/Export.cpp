@@ -404,7 +404,7 @@ int APS5_VABI sceRtcGetDosTime(const RtcDateTime* time, uint32_t* dos_time) {
     if (!dos_time) return SCE_RTC_ERROR_INVALID_POINTER;
     if (const int result = validate(time); result != 0) return result;
     if (time->year < 1980 || time->year > 2107) {
-        NotImplemented_nid_no_patch(__func__);
+        *dos_time = time->year < 1980 ? 0 : 0xff9fbf7du;
         return SCE_RTC_ERROR_INVALID_YEAR;
     }
     *dos_time = static_cast<uint32_t>(time->year - 1980) << 25 | static_cast<uint32_t>(time->month) << 21

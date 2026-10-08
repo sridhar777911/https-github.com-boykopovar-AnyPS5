@@ -115,7 +115,7 @@ int Option(int guest) {
 bool Address(const void* input, std::uint32_t length, sockaddr_storage& native, socklen_t& size) {
     if (!input || length < 2) { Fail(14); return false; }
     const auto* bytes = static_cast<const unsigned char*>(input);
-    if (bytes[1] == 2 && length >= 16 && bytes[0] == 16) {
+    if (bytes[1] == 2 && length >= 16) {
         auto& v4 = reinterpret_cast<sockaddr_in&>(native);
         v4.sin_family = AF_INET;
         std::memcpy(&v4.sin_port, bytes + 2, 2);
@@ -123,7 +123,7 @@ bool Address(const void* input, std::uint32_t length, sockaddr_storage& native, 
         size = sizeof(v4);
         return true;
     }
-    if (bytes[1] == 28 && length >= 28 && bytes[0] == 28) {
+    if (bytes[1] == 28 && length >= 28) {
         auto& v6 = reinterpret_cast<sockaddr_in6&>(native);
         v6.sin6_family = AF_INET6;
         std::memcpy(&v6.sin6_port, bytes + 2, 2);

@@ -696,6 +696,14 @@ void DepthBoundsBiasTests() {
     Require(state.depthBias && state.depthBiasConstant == 4.0f, "culled back faces must not constrain the front depth bias");
     queue.context[0x2de] = 0x1f0u;
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "units other than the depth format");
+    queue.context[0x2de] = 0x1e9u;
+    auto cleared = queue;
+    cleared.ClearContext();
+    for (const auto& [offset, value] : queue.context) {
+        if (offset != 0x2dfu) cleared.context[offset] = value;
+    }
+    state = AgcDriver::Graphics::DecodeState(cleared);
+    Require(state.depthBias && state.depthBiasConstant == 4.0f && state.depthBiasClamp == 0.0f, "a depth bias clamp the title never writes must decode as its reset value 0");
 }
 
 alignas(256) std::array<std::uint8_t, 4> dccKeys{};
@@ -809,6 +817,70 @@ void metadataPassTests() {
             Require(AgcDriver::Graphics::FillDccClear(tenBitPass->targets[0].format, clear.keys, tenBitPass->targets[0].dccAlphaOnMsb, std::as_writable_bytes(std::span(copied))) && std::ranges::all_of(copied, [&](std::uint32_t word) { return word == clear.texel; }), "a copied " + name + " target under " + clear.code + " keys was not filled with its 10/10/10/2 texel");
         }
     }
+}
+
+alignas(256) std::array<std::uint8_t, 4> cmaskMemory{};
+
+void cmaskTests() {
+    using AgcDriver::Graphics::DecodeColorBuffer;
+    auto queue = makeState();
+    queue.context[0x31c] |= 0x2000;
+    const auto cmaskAddress = reinterpret_cast<std::uintptr_t>(cmaskMemory.data());
+    queue.context[0x31f] = static_cast<std::uint32_t>(cmaskAddress >> 8u);
+    queue.context[0x398] = static_cast<std::uint32_t>(cmaskAddress >> 40u);
+    queue.context[0x323] = 0x11223344;
+    queue.context[0x324] = 0;
+    const auto target = DecodeColorBuffer(queue.context, 0);
+    Require(target.cmaskAddress == cmaskAddress && target.cmaskBytes == cmaskMemory.size(), "the fast-clear target lost its CMASK");
+    Require(DecodeColorBuffer(makeState().context, 0).cmaskAddress == 0, "a target without FAST_CLEAR got a CMASK");
+    auto mipmapped = queue;
+    mipmapped.context[0x3b0] |= 1u << 28u;
+    expectFailure([&] { DecodeColorBuffer(mipmapped.context, 0); }, "mipmapped, 3D or array");
+    auto unaddressed = queue;
+    unaddressed.context[0x31f] = 0;
+    unaddressed.context[0x398] = 0;
+    expectFailure([&] { DecodeColorBuffer(unaddressed.context, 0); }, "without a CMASK address");
+
+    queue.context[0x0] = 0;
+    queue.context[0x202] = 0xcc0020;
+    auto pass = AgcDriver::Graphics::DecodeColorMetadataPass(queue);
+    Require(pass.has_value() && pass->targets.size() == 1 && pass->targets[0].cmaskAddress == cmaskAddress, "the metadata pass lost the target's CMASK");
+    const AgcDriver::Graphics::Context context{};
+    const auto texels = [&](std::uint32_t value) {
+        for (std::size_t offset = 0; offset < colorMemory.size(); offset += 4) {
+            std::uint32_t texel = 0;
+            std::memcpy(&texel, colorMemory.data() + offset, 4);
+            if (texel != value) return false;
+        }
+        return true;
+    };
+    const auto cmaskIs = [&](std::uint8_t value) { return std::all_of(cmaskMemory.begin(), cmaskMemory.end(), [&](std::uint8_t byte) { return byte == value; }); };
+    std::memset(colorMemory.data(), 0x5a, colorMemory.size());
+    cmaskMemory.fill(0);
+    AgcDriver::Graphics::RunColorMetadataPass(context, *pass);
+    Require(texels(0x11223344) && cmaskIs(0xff), "a CMASK fast clear was not eliminated into the texels");
+    std::memset(colorMemory.data(), 0x5a, colorMemory.size());
+    AgcDriver::Graphics::RunColorMetadataPass(context, *pass);
+    Require(texels(0x5a5a5a5au) && cmaskIs(0xff), "a pass over an expanded CMASK changed the texels");
+    cmaskMemory = {0x00, 0xff, 0x00, 0x00};
+    expectFailure([&] { AgcDriver::Graphics::RunColorMetadataPass(context, *pass); }, "not all fast-cleared or all expanded");
+    Require(texels(0x5a5a5a5au), "a refused pass changed the texels");
+
+    queue.context[0x31c] |= 0x10000000;
+    const auto keysAddress = reinterpret_cast<std::uintptr_t>(dccKeys.data());
+    queue.context[0x325] = static_cast<std::uint32_t>(keysAddress >> 8u);
+    queue.context[0x3a8] = static_cast<std::uint32_t>(keysAddress >> 40u);
+    pass = AgcDriver::Graphics::DecodeColorMetadataPass(queue);
+    Require(pass.has_value() && pass->targets.size() == 1 && pass->targets[0].cmaskAddress == cmaskAddress && pass->targets[0].dccAddress == keysAddress, "a DCC fast-clear target lost its CMASK or DCC keys");
+    std::memset(colorMemory.data(), 0x5a, colorMemory.size());
+    cmaskMemory.fill(0xff);
+    dccKeys.fill(0x20);
+    AgcDriver::Graphics::RunColorMetadataPass(context, *pass);
+    Require(texels(0x11223344) && cmaskIs(0xff) && std::ranges::all_of(dccKeys, [](std::uint8_t key) { return key == 0xff; }), "a DCC fast clear under an expanded CMASK was not eliminated through its keys");
+    std::memset(colorMemory.data(), 0x5a, colorMemory.size());
+    cmaskMemory.fill(0);
+    expectFailure([&] { AgcDriver::Graphics::RunColorMetadataPass(context, *pass); }, "DCC color target that is not all expanded");
+    Require(texels(0x5a5a5a5au), "a refused pass changed the texels of a DCC target");
 }
 
 void DepthClipTests() {
@@ -2196,6 +2268,7 @@ int main() {
         DisabledColorTests();
         CompactedExportTests();
         metadataPassTests();
+        cmaskTests();
         ShaderStageTests();
         PixelInputLayoutTests();
         InitialContextTests();

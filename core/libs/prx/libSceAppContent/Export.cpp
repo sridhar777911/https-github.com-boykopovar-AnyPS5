@@ -12,7 +12,7 @@
 static constexpr int SCE_APP_CONTENT_ERROR_PARAMETER = static_cast<int>(0x80D90002);
 static constexpr int SCE_APP_CONTENT_ERROR_NOT_FOUND = static_cast<int>(0x80D90005);
 static constexpr int SCE_APP_CONTENT_ERROR_DRM_NO_ENTITLEMENT = static_cast<int>(0x80D90007);
-static constexpr uint32_t APPPARAM_ID_SKU_FLAG = 1;
+static constexpr uint32_t APPPARAM_ID_SKU_FLAG = 0;
 static constexpr int32_t SKU_FLAG_FULL = 3;
 
 static constexpr char TEMPORARY_MOUNT_POINT[] = "/temp0";
@@ -65,8 +65,8 @@ int APS5_VABI sceAppContentAppParamGetInt(uint32_t param_id, int32_t* value) {
     case APPPARAM_ID_SKU_FLAG:
         *value = SKU_FLAG_FULL;
         return 0;
-    case 2: case 3: case 4: case 5:
-        *value = 0;
+    case 1: case 2: case 3: case 4:
+        *value = GetAppUserDefinedParam_nid_postfix(param_id - 1);
         return 0;
     default:
         return SCE_APP_CONTENT_ERROR_PARAMETER;

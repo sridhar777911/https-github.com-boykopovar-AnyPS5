@@ -10,6 +10,7 @@ int APS5_VABI sceAppContentAddcontUnmount(const AppContentMountPoint*);
 int APS5_VABI sceAppContentGetAddcontInfo(uint32_t, const NpUnifiedEntitlementLabel*, void*);
 int APS5_VABI sceAppContentGetAddcontInfoList(uint32_t, void*, uint32_t, uint32_t*);
 int APS5_VABI sceAppContentDownloadDataGetAvailableSpaceKb(const AppContentMountPoint*, size_t*);
+int APS5_VABI sceAppContentAppParamGetInt(uint32_t, int32_t*);
 }
 
 static constexpr int ErrorParameter = static_cast<int>(0x80D90002);
@@ -21,7 +22,8 @@ int main() {
     std::filesystem::create_directories("app0/sce_sys");
     {
         std::ofstream param("app0/sce_sys/param.json", std::ios::binary);
-        param << R"({"titleId":"PPSA00000","localizedParameters":{"en-US":{"titleName":"Example"}},"downloadDataSize":0})";
+        param << R"({"titleId":"PPSA00000","localizedParameters":{"en-US":{"titleName":"Example"}},"downloadDataSize":0,)"
+              R"("userDefinedParam1":23566,"userDefinedParam2":-7,"userDefinedParam3":0,"userDefinedParam4":2147483647})";
         Require(static_cast<bool>(param));
     }
     AppContentMountPoint download{};
@@ -30,6 +32,17 @@ int main() {
     Require(sceAppContentDownloadDataGetAvailableSpaceKb(&download, &availableKb) == 0);
     Require(availableKb == 0);
     Require(sceAppContentDownloadDataGetAvailableSpaceKb(&download, nullptr) == ErrorParameter);
+
+    const int32_t expectedParams[] = {3, 23566, -7, 0, 2147483647};
+    for (uint32_t id = 0; id < 5; ++id) {
+        int32_t value = 0x5a5a5a5a;
+        Require(sceAppContentAppParamGetInt(id, &value) == 0);
+        Require(value == expectedParams[id]);
+    }
+    int32_t paramValue = 0x5a5a5a5a;
+    Require(sceAppContentAppParamGetInt(5, &paramValue) == ErrorParameter);
+    Require(paramValue == 0x5a5a5a5a);
+    Require(sceAppContentAppParamGetInt(0, nullptr) == ErrorParameter);
 
     NpUnifiedEntitlementLabel label{};
     std::memcpy(&label, "ADDCONT000000001", 16);
