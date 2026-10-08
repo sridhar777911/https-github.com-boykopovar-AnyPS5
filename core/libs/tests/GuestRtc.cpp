@@ -120,9 +120,9 @@ int main() {
     const RtcDateTime dosBadMonth{2024, 13, 1, 0, 0, 0, 0};
     Require(sceRtcGetDosTime(&dosBadMonth, &dosTime) == invalidMonth);
     const RtcDateTime dosEarly{1979, 12, 31, 0, 0, 0, 0};
-    bool dosEarlyThrew = false;
-    try { sceRtcGetDosTime(&dosEarly, &dosTime); } catch (const std::exception&) { dosEarlyThrew = true; }
-    Require(dosEarlyThrew);
+    Require(sceRtcGetDosTime(&dosEarly, &dosTime) == invalidYear && dosTime == 0);
+    const RtcDateTime dosLate{2108, 1, 1, 0, 0, 0, 0};
+    Require(sceRtcGetDosTime(&dosLate, &dosTime) == invalidYear && dosTime == 0xff9fbf7du);
     converted = RtcDateTime{1, 1, 1, 1, 1, 1, 1};
     Require(sceRtcSetDosTime(&converted, 0x585d645cu) == 0 && Equal(converted, RtcDateTime{2024, 2, 29, 12, 34, 56, 0}));
     Require(sceRtcSetDosTime(&converted, 0x7f9fbf7du) == 0 && Equal(converted, RtcDateTime{2043, 12, 31, 23, 59, 58, 0}));
