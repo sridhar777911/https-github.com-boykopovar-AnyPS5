@@ -33,6 +33,22 @@ static ParsedParamJson ParseText(const std::filesystem::path& path, const std::s
     return parseParamJson(path);
 }
 
+static void CheckUserDefinedParams(const std::filesystem::path& path) {
+    const auto parsed = ParseText(path, R"({"titleId":"PPSA23566","localizedParameters":{"en-US":{"titleName":"Example"}},)"
+                                        R"("userDefinedParam1":23566,"userDefinedParam3":-7,"userDefinedParam4":2147483647})");
+    Require(parsed.userDefinedParams[0] == 23566 && parsed.userDefinedParams[1] == 0 && parsed.userDefinedParams[2] == -7 &&
+            parsed.userDefinedParams[3] == 2147483647, "Incorrect user defined params");
+    for (const auto* text : {"2147483648", "1.5", "1e3", "\"1\"", "true"}) {
+        bool rejected = false;
+        try {
+            ParseText(path, std::string(R"({"titleId":"PPSA00000","localizedParameters":{"en-US":{"titleName":"Example"}},"userDefinedParam2":)") + text + "}");
+        } catch (const std::exception&) {
+            rejected = true;
+        }
+        Require(rejected, std::string("Accepted invalid user defined param: ") + text);
+    }
+}
+
 static void CheckLanguages(const std::filesystem::path& path) {
     const auto nested = ParseText(path, "{\r\n  \"localizedParameters\": {\r\n    \"defaultLanguage\": \"en-GB\",\r\n"
                                         "    \"en-GB\": { \"titleName\": \"British\" }\r\n  },\r\n  \"titleId\": \"PPSA00001\"\r\n}\r\n");
@@ -99,6 +115,7 @@ int main() {
             Require(rejected, std::string("Accepted invalid download size: ") + text);
         }
         CheckLanguages(path);
+        CheckUserDefinedParams(path);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         result = 1;

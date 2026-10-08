@@ -696,6 +696,14 @@ void DepthBoundsBiasTests() {
     Require(state.depthBias && state.depthBiasConstant == 4.0f, "culled back faces must not constrain the front depth bias");
     queue.context[0x2de] = 0x1f0u;
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "units other than the depth format");
+    queue.context[0x2de] = 0x1e9u;
+    auto cleared = queue;
+    cleared.ClearContext();
+    for (const auto& [offset, value] : queue.context) {
+        if (offset != 0x2dfu) cleared.context[offset] = value;
+    }
+    state = AgcDriver::Graphics::DecodeState(cleared);
+    Require(state.depthBias && state.depthBiasConstant == 4.0f && state.depthBiasClamp == 0.0f, "a depth bias clamp the title never writes must decode as its reset value 0");
 }
 
 alignas(256) std::array<std::uint8_t, 4> dccKeys{};
