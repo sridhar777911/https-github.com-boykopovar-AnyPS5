@@ -285,8 +285,9 @@ void decideImportWatch(const Context& context, HostImports& state) {
     if (state.watchDevice == context.device) return;
 #ifdef _WIN32
     state.watchDevice = context.device;
-    state.unwatchImports = false;
+    state.unwatchImports = true;
     state.unwatchDmaBufImports = false;
+    if (context.hostImportAlignment != 0 && GuestMemory::WriteWatched()) std::fprintf(stderr, "[write-watch] host imports are compared on Windows because driver writes can arrive after the import window\n");
 #else
     const auto request = importWatchRequest();
     state.watchDevice = context.device;

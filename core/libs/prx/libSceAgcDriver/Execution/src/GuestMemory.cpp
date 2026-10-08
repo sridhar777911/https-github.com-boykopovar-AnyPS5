@@ -1,5 +1,6 @@
 #include "prx/libSceAgcDriver/Execution/include/ProfileOutput.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
+#include "prx/libSceAgcDriver/Execution/include/WriteWatchCoverage.hpp"
 #include "ThreadOwned.hpp"
 #include "prx/libc/include/GuestAllocations.hpp"
 #include "prx/libc/include/GuestArena.hpp"
@@ -670,6 +671,10 @@ constexpr std::size_t WriteBlockBytes = 65536;
 
 enum class StampKind : std::uint8_t { Cpu, Driver, ImportWindow };
 
+#ifdef _WIN32
+void watchPrivateMapping(std::uintptr_t address, std::size_t bytes, std::uint64_t generation);
+#endif
+
 struct WriteTracker {
     std::mutex mutex;
     bool initialized = false;
@@ -684,6 +689,7 @@ struct WriteTracker {
     // records in the same block (the title's per-job slots are 0x20 apart) must not count.
     std::vector<std::uint32_t> cpuBlocks;
     std::vector<std::uint32_t> writtenBlocks;
+    WriteWatchCoverage coverage;
 #else
     static constexpr std::size_t LeafBlocks = std::size_t{1} << 16;
     static constexpr std::size_t LeafCount = std::size_t{1} << 15;
@@ -727,7 +733,9 @@ struct WriteTracker {
         blocks.assign(size / WriteBlockBytes + 1, 0);
         cpuBlocks.assign(size / WriteBlockBytes + 1, 0);
         writtenBlocks.assign(size / WriteBlockBytes + 1, 0);
+        coverage.Initialize(base, size);
         pages.resize(1u << 16);
+        GuestArena::GuestArenaSetPrivateMappingObserver_nid_postfix(&watchPrivateMapping);
 #else
         watched = GuestWriteWatch::GuestWriteWatchAvailable_nid_postfix();
         if (watched) leaves.resize(LeafCount);
@@ -736,7 +744,7 @@ struct WriteTracker {
 
     bool covers(std::uint64_t address, std::size_t bytes) const {
 #ifdef _WIN32
-        return address >= base && address - base <= size - bytes;
+        return coverage.Covers(address, bytes);
 #else
         return address + bytes <= LeafCount * LeafBlocks * WriteBlockBytes && GuestWriteWatch::GuestWriteWatchCovers_nid_postfix(static_cast<std::uintptr_t>(address), bytes);
 #endif
@@ -850,6 +858,21 @@ std::unique_lock<std::mutex> lockTracker(WriteTracker& tracker) {
     trackerAcquisitions.fetch_add(1, std::memory_order_relaxed);
     return lock;
 }
+
+#ifdef _WIN32
+void watchPrivateMapping(std::uintptr_t address, std::size_t bytes, std::uint64_t generation) {
+    auto& tracker = Tracker();
+    const auto lock = lockTracker(tracker);
+    if (!tracker.watched || bytes == 0 || bytes > tracker.size || address < tracker.base || address - tracker.base > tracker.size - bytes) return;
+    tracker.coverage.Restore(address, bytes, generation);
+    ++tracker.generation;
+    for (auto block = tracker.blockOf(address); block <= tracker.blockOf(address + bytes - 1); ++block) {
+        tracker.driverPieces.erase(block);
+        tracker.stamp(block, tracker.generation, StampKind::Cpu);
+    }
+    unwatchSerial.fetch_add(1, std::memory_order_release);
+}
+#endif
 
 // Collect epochs are per thread and globally unique: every bump takes a fresh value from one counter,
 // so a memo entry (stamped with the epoch of its walk) can only match the thread that made it, and
@@ -1013,11 +1036,10 @@ std::uint64_t CollectEpochBumps() {
 
 namespace {
 
-void unwatchLocked(const WriteTracker& tracker, std::uint64_t address, std::size_t bytes) {
+void unwatchLocked(WriteTracker& tracker, std::uint64_t address, std::size_t bytes) {
     if (!tracker.watched) return;
 #ifdef _WIN32
-    static_cast<void>(address);
-    static_cast<void>(bytes);
+    if (tracker.coverage.Exclude(address, bytes, GuestArena::GuestArenaCommitGeneration_nid_postfix())) unwatchSerial.fetch_add(1, std::memory_order_release);
 #else
     if (GuestWriteWatch::GuestWriteWatchUnregister_nid_postfix(reinterpret_cast<const void*>(address), bytes)) unwatchSerial.fetch_add(1, std::memory_order_release);
 #endif
