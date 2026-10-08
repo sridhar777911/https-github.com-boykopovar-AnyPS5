@@ -287,6 +287,8 @@ std::int64_t message_length(const NetMsghdr* message) {
 
 extern "C" {
 
+extern const std::uint32_t sce_net_in6addr_any[4] = {};
+
 int* APS5_VABI sceNetErrnoLoc(void) {
     return errno_slot();
 }
@@ -1057,5 +1059,8 @@ int APS5_VABI sceNetResolverStartNtoaMultipleRecords() {
     NotImplemented_nid_no_patch(__func__);
     return 0;
 }
+
+extern const std::uint8_t in6addr_any_nid_postfix[16] = {};
+extern const std::uint8_t in6addr_loopback_nid_postfix[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
 
 }

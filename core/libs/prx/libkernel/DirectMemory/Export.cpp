@@ -196,7 +196,8 @@ int32_t APS5_VABI sceKernelMapNamedFlexibleMemory(void** addr_in_out, size_t len
 }
 
 int32_t APS5_VABI sceKernelMapNamedFlexibleMemoryInternal(void** addr_in_out, size_t len, int prot, int flags, const char* name) {
- return sceKernelMapNamedFlexibleMemory(addr_in_out, len, prot, flags, name);
+ constexpr int IgnoredInternalFlag = 0x8000;
+ return sceKernelMapNamedFlexibleMemory(addr_in_out, len, prot, flags & ~IgnoredInternalFlag, name);
 }
 
 int APS5_VABI sceKernelMprotect(const void* addr, size_t len, int prot) {

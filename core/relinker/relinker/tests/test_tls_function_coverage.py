@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import platform
 import struct
 import subprocess
 import sys
@@ -9,6 +10,8 @@ from test_optional_plt import fixture
 
 
 TLS_LOAD = bytes.fromhex("66 66 66 64 48 8b 04 25 00 00 00 00")
+RUNNER = Path(__file__).with_name("windows_image_runner.py")
+RUNS_ON_HOST = sys.platform == "linux" and platform.machine() == "x86_64"
 
 
 def register_load(register):
@@ -306,6 +309,10 @@ def main():
             assert pe_bytes_at(pe, 0x11850, len(TLS_LOAD)) == TLS_LOAD, name
             if os.name == "nt":
                 executed = subprocess.run([str(output)], capture_output=True, timeout=30)
+                assert executed.returncode == 42, (name, executed.returncode, executed.stderr)
+            elif RUNS_ON_HOST:
+                entry = 0x10000 + struct.unpack_from("<Q", image, 24)[0]
+                executed = subprocess.run([sys.executable, str(RUNNER), str(output), hex(entry)], capture_output=True, timeout=30)
                 assert executed.returncode == 42, (name, executed.returncode, executed.stderr)
 
         for metadata in ("unwind", "symbol"):
