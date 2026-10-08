@@ -198,12 +198,21 @@ int main() {
     Require(sceRtcParseRFC3339(&tick, "2024-02-29T12:34:56.789-23:59") == 0 && tick.tick == leapDayTick + 86340000000ull);
     Require(sceRtcParseRFC3339(nullptr, "1970-01-01T00:00:00Z") == invalidPointer);
 
-    Require(sceRtcParseDateTime(&tick, "2024-02-29T12:34:56.789") == 0 && tick.tick == leapDayTick);
-    Require(sceRtcParseDateTime(&tick, "2024-02-29 12:34:56") == 0 && tick.tick == leapDayTick - 789000ull);
+    for (const char* text : {"2024-02-29T12:34:56.789", "2024-02-29 12:34:56", "2024-02-29 12:34:56Z", "2024-02-29", "2024/02/29T12:34:56Z", "2024-02-29T12:34:56."}) {
+        tick.tick = 123;
+        Require(sceRtcParseDateTime(&tick, text) == badParse);
+        Require(tick.tick == 123);
+    }
+    Require(sceRtcParseDateTime(&tick, " \t 2024-02-29T12:34:56.789Z") == 0 && tick.tick == leapDayTick);
+    Require(sceRtcParseDateTime(&tick, "2024-02-29T12:34:56.789Zjunk") == 0 && tick.tick == leapDayTick);
+    Require(sceRtcParseDateTime(&tick, "2024-02-29T12:34:56.789+99:99") == 0 && tick.tick == leapDayTick - 6039ull * 60000000ull);
+    tick.tick = 123;
+    Require(sceRtcParseDateTime(&tick, "2024-02-29T12:34:60-01:00") == 0 && tick.tick == 123ull + 3600000000ull);
+    Require(sceRtcParseDateTime(&tick, "2024-13-01T00:00:00Z") == static_cast<int>(0x80B50009));
     Require(sceRtcParseDateTime(&tick, "2024-02-29T14:04:56.789+01:30") == 0 && tick.tick == leapDayTick);
     Require(sceRtcParseDateTime(&tick, "2024-02-29t12:34:56.789z") == 0 && tick.tick == leapDayTick);
     Require(sceRtcParseDateTime(&tick, "1970-01-01T00:00:00Z") == 0 && tick.tick == unixEpochTick);
-    Require(sceRtcParseDateTime(&tick, "2023-02-29T00:00:00") == invalidDay);
+    Require(sceRtcParseDateTime(&tick, "2023-02-29T00:00:00Z") == invalidDay);
     Require(sceRtcParseDateTime(nullptr, "1970-01-01T00:00:00Z") == invalidPointer);
     Require(sceRtcParseDateTime(&tick, "Thu, 29 Feb 2024 12:34:56") == 0 && tick.tick == leapDayTick - 789000ull);
     Require(sceRtcParseDateTime(&tick, "Thu, 29 Feb 2024 12:34:56 GMT") == 0 && tick.tick == leapDayTick - 789000ull);
@@ -215,11 +224,6 @@ int main() {
     Require(sceRtcParseDateTime(&tick, "Thu Jan  1 00:00:00 1970") == 0 && tick.tick == unixEpochTick);
     Require(sceRtcParseDateTime(&tick, "Thu Feb 30 00:00:00 2024") == invalidDay);
     const char* unparseable[] = {
-        "2024-02-29",
-        "2024/02/29T12:34:56",
-        "2024-02-29T12:34:56Zjunk",
-        "2024-02-29T12:34:56+99:99",
-        "2024-02-29T12:34:56.",
         "Thu, 29 Feb 2024 12:34:56 +01:30",
         "Thu, 29 Feb 2024 12:34:56 PST",
         "Thu, 29 Xyz 2024 12:34:56",
