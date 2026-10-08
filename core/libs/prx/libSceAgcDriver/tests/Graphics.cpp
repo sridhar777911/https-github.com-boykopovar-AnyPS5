@@ -475,6 +475,13 @@ void DisabledColorTests() {
     Require(partial.hasColorTarget && partial.blend.colorWriteMask == 3, "partial color write mask changed");
     queue.context.erase(0x31c);
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "missing register");
+    for (const auto colorControl : {0x0u, 0xcc0000u}) {
+        queue = makeState();
+        queue.context[0x202] = colorControl;
+        const auto unwritten = AgcDriver::Graphics::DecodeState(queue);
+        Require(!unwritten.hasColorTarget && unwritten.colors.empty() && unwritten.color.address == 0, "CB_COLOR_CONTROL mode disable kept a color attachment");
+        Require(unwritten.renderExtent.width == 64 && unwritten.renderExtent.height == 4, "CB_COLOR_CONTROL mode disable lost the screen scissor extent");
+    }
 }
 
 void CompactedExportTests() {
