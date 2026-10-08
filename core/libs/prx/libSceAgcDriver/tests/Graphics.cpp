@@ -1765,6 +1765,34 @@ void conservativeZExportTests() {
     expectFailure([&] { AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false); }, "unsupported fragment execution mode");
 }
 
+void ConservativeRasterizationTests() {
+    auto queue = makeState();
+    queue.context[0x1b3] = 2;
+    queue.context[0x1b4] = 2;
+    Require(AgcDriver::Graphics::DecodeState(queue).conservativeRasterization == VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT, "PA_SC_CONSERVATIVE_RASTERIZATION_CNTL 0x6000 enabled conservative rasterization");
+    queue.context[0x313] = 0x6001;
+    for (const auto primitive : {4u, 5u, 6u}) {
+        queue.userConfig[0x242] = primitive;
+        Require(AgcDriver::Graphics::DecodeState(queue).conservativeRasterization == VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT, "OVER_RAST_ENABLE did not decode to overestimation for primitive type " + std::to_string(primitive));
+        Require(AgcDriver::Graphics::DrawRejection(queue, false).empty(), "the precheck rejected OVER_RAST_ENABLE");
+    }
+    for (const auto primitive : {2u, 17u}) {
+        queue.userConfig[0x242] = primitive;
+        expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "conservative rasterization of points, lines or rectangles");
+    }
+    queue.userConfig[0x242] = 4;
+    for (const auto inputs : {0x6u, 0x42u}) {
+        queue.context[0x1b3] = inputs;
+        expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "conservative rasterization with centroid interpolation");
+    }
+    queue.context[0x1b3] = 2;
+    for (const auto control : {0x6003u, 0x6020u, 0x6401u, 0xe06001u, 0x1u}) {
+        queue.context[0x313] = control;
+        expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "PA_SC_CONSERVATIVE_RASTERIZATION_CNTL=0x");
+        Require(AgcDriver::Graphics::DrawRejection(queue, false).find("PA_SC_CONSERVATIVE_RASTERIZATION_CNTL=0x") != std::string::npos, "the precheck accepted PA_SC_CONSERVATIVE_RASTERIZATION_CNTL " + std::to_string(control));
+    }
+}
+
 void pixelParameterSlotTests() {
     using AgcDriver::Graphics::CompiledShader;
     const VkPhysicalDeviceSubgroupProperties subgroup{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
@@ -2144,6 +2172,7 @@ int main() {
         ZExportTests();
         DepthBoundsBiasTests();
         conservativeZExportTests();
+        ConservativeRasterizationTests();
         DisabledColorTests();
         CompactedExportTests();
         metadataPassTests();

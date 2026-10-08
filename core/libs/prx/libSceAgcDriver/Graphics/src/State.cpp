@@ -56,6 +56,12 @@ std::string vteMessage(std::uint32_t viewportControl) {
     return message.str();
 }
 
+std::string conservativeMessage(std::uint32_t control) {
+    std::ostringstream message;
+    message << "AGC graphics: PA_SC_CONSERVATIVE_RASTERIZATION_CNTL=0x" << std::hex << control << ": only 0x6000 (off) and 0x6001 (overestimation) are supported";
+    return message.str();
+}
+
 // The register rules DecodeState and DrawRejection share (the precheck must reject exactly what
 // DecodeState would): the masks whose set bits are unsupported, and the depth-control verdict.
 // Render target index, viewport index and the misc export vector that carries them are accepted but
@@ -492,7 +498,13 @@ State DecodeState(const QueueState& queue) {
     Require(read(cx, 0x83) == 0xffffu, "clip rectangles are unsupported");
     Require((read(cx, 0x8c) & 0xfu) == 0xau, "nonstandard triangle edge rules are unsupported");
     Require(read(cx, 0x2f9) == 0x2du, "nonstandard pixel center or vertex quantization is unsupported");
-    Require(read(cx, 0x313) == 0x6000u, "conservative rasterization is unsupported");
+    if (const auto conservative = read(cx, 0x313); conservative != 0x6000u) {
+        if (conservative != 0x6001u) throw std::runtime_error(conservativeMessage(conservative));
+        const bool triangles = result.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST || result.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP || result.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+        Require(result.stages.path != ShaderPath::Vertex || triangles, "conservative rasterization of points, lines or rectangles is unsupported");
+        Require((read(cx, 0x1b3) & 0x44u) == 0, "conservative rasterization with centroid interpolation is unsupported");
+        result.conservativeRasterization = VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT;
+    }
     Require(read(cx, 0x30e) == 0xffffffffu && read(cx, 0x30f) == 0xffffffffu, "sample masks are unsupported");
     const auto viewportControl = read(cx, 0x206);
     if (viewportControl != 0x43fu) throw std::runtime_error(vteMessage(viewportControl));
@@ -783,7 +795,7 @@ std::string DrawRejection(const QueueState& queue, bool indexed) {
     if (value(cx, 0x83, word) && word != 0xffffu) return require(false, "clip rectangles are unsupported");
     if (value(cx, 0x8c, word) && (word & 0xfu) != 0xau) return require(false, "nonstandard triangle edge rules are unsupported");
     if (value(cx, 0x2f9, word) && word != 0x2du) return require(false, "nonstandard pixel center or vertex quantization is unsupported");
-    if (value(cx, 0x313, word) && word != 0x6000u) return require(false, "conservative rasterization is unsupported");
+    if (value(cx, 0x313, word) && word != 0x6000u && word != 0x6001u) return conservativeMessage(word);
     std::uint32_t other = 0;
     if (value(cx, 0x30e, word) && value(cx, 0x30f, other) && (word != 0xffffffffu || other != 0xffffffffu)) return require(false, "sample masks are unsupported");
     if (value(cx, 0x206, word) && word != 0x43fu) return vteMessage(word);
