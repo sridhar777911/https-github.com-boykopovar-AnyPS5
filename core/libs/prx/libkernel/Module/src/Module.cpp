@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include "SceTypes.hpp"
@@ -84,14 +85,51 @@ int APS5_VABI sceKernelGetModuleInfoForUnwind(uint64_t addr, int flags, ModuleIn
 #endif
 }
 
+namespace {
+
+struct PendingModuleArgs {
+    std::size_t args = 0;
+    const void* argp = nullptr;
+};
+std::mutex pendingModuleArgsMutex;
+PendingModuleArgs pendingModuleArgs;
+int pendingModuleInitResult = 0;
+
+}
+
+extern "C" {
+
+const void* __aps5_get_pending_module_args_nid_no_patch() {
+    std::lock_guard lock(pendingModuleArgsMutex);
+    return &pendingModuleArgs;
+}
+
+void __aps5_set_module_init_result_nid_no_patch(int result) {
+    std::lock_guard lock(pendingModuleArgsMutex);
+    pendingModuleInitResult = result;
+}
+
+}
+
 KernelModule APS5_VABI sceKernelLoadStartModule(const char* module_file_name, size_t args, const void* argp, uint32_t flags, const KernelLoadModuleOpt* opt, int* res) {
- (void)args;
- (void)argp;
  (void)flags;
  (void)opt;
  if (res) *res = 0;
  if (!module_file_name) return static_cast<KernelModule>(SCE_KERNEL_ERROR_EFAULT);
+ {
+     std::lock_guard lock(pendingModuleArgsMutex);
+     pendingModuleArgs = {args, argp};
+     pendingModuleInitResult = 0;
+ }
  void* handle = dlopen_nid_postfix(module_file_name, kRtldNow);
+ int started = 0;
+ {
+     std::lock_guard lock(pendingModuleArgsMutex);
+     started = pendingModuleInitResult;
+     pendingModuleArgs = {};
+     pendingModuleInitResult = 0;
+ }
+ if (res) *res = started;
  if (!handle) return static_cast<KernelModule>(SCE_KERNEL_ERROR_ENOENT);
  return static_cast<KernelModule>(reinterpret_cast<intptr_t>(handle));
 }
