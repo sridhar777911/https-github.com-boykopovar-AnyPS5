@@ -1,6 +1,8 @@
 #ifndef CORE_SHADER_RECOMPILIER_INCLUDE_SHADER_RECOMPILIER_RECOMPILER_HPP
 #define CORE_SHADER_RECOMPILIER_INCLUDE_SHADER_RECOMPILIER_RECOMPILER_HPP
 
+#include "ShaderFloatMode.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -159,6 +161,7 @@ struct GuestContext {
     std::optional<ShaderPixelStageInfo> pixel;
     std::optional<ShaderVertexStageInfo> vertex;
     std::span<const MemoryRegion> memory;
+    std::optional<ShaderFloatMode> floatMode;
 };
 
 struct MeshTargetLimits {
@@ -222,6 +225,7 @@ struct LinkedProgram {
     std::uint32_t userDataBaseRegister;
     std::uint32_t firstUserSgpr;
     std::span<const std::uint32_t> userData;
+    std::optional<ShaderFloatMode> floatMode;
 };
 
 struct MeshConfiguration {
