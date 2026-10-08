@@ -2620,14 +2620,14 @@ StorageTexture::FillCoverage StorageTexture::ClassifyFill(std::uint64_t address,
                 if (texture->descriptor.baseAddress >= address && texture->descriptor.baseAddress + texture->guestBytes <= end) ++coverage.inside;
             }
         }
-    } else if (overlapping.empty()) {
-        constexpr std::uint64_t keyBytes = 256;
-        for (const auto* texture : live.textures) {
-            if (!texture->released && texture->descriptor.dccAddress == address && texture->guestBytes / keyBytes != 0 && bytes >= texture->guestBytes / keyBytes) coverage.cover = FillCover::Keys;
-        }
+    } else if (std::any_of(live.textures.begin(), live.textures.end(), [&](const StorageTexture* texture) {
+                   constexpr std::uint64_t keyBytes = 256;
+                   return !texture->released && texture->descriptor.dccAddress == address && texture->guestBytes / keyBytes != 0 && bytes >= texture->guestBytes / keyBytes;
+               })) {
+        coverage.cover = FillCover::Keys;
     } else if (overlapping.size() > 1) {
         coverage.cover = FillCover::Several;
-    } else {
+    } else if (overlapping.size() == 1) {
         auto* single = overlapping.front();
         const auto begin = single->descriptor.baseAddress;
         const auto stop = begin + single->guestBytes;
