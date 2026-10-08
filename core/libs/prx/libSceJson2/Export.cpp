@@ -777,14 +777,23 @@ int APS5_VABI sceJson2Unknown00(void) {
     return 0;
 }
 
+enum SpecialFloatFormatType : std::int32_t {
+    SpecialFloatFormatDefault = 0,
+};
+
 struct InitParameter2 {
     void* allocator;
     void* userData;
     std::size_t fileBufferSize;
+    SpecialFloatFormatType specialFloatFormatType;
 };
 static_assert(sizeof(InitParameter2) <= 40);
 
 void APS5_VABI _ZN3sce4Json14InitParameter2C1Ev(InitParameter2* self) {
+    *self = {};
+}
+
+void APS5_VABI _ZN3sce4Json14InitParameter2C2Ev(InitParameter2* self) {
     *self = {};
 }
 
@@ -795,6 +804,21 @@ void APS5_VABI _ZN3sce4Json14InitParameter212setAllocatorEPNS0_12MemAllocatorEPv
 
 void APS5_VABI _ZN3sce4Json14InitParameter217setFileBufferSizeEm(InitParameter2* self, std::size_t size) {
     self->fileBufferSize = size;
+}
+
+void APS5_VABI _ZN3sce4Json14InitParameter225setSpecialFloatFormatTypeENS0_22SpecialFloatFormatTypeE(InitParameter2* self, SpecialFloatFormatType format) {
+    self->specialFloatFormatType = format;
+}
+
+struct InitParameterRtti2 {
+    void* allocatorRtti;
+    void* userData;
+};
+static_assert(sizeof(InitParameterRtti2) <= 32);
+
+void APS5_VABI _ZN3sce4Json18InitParameterRtti216setAllocatorRttiEPNS0_14AllocParamRttiEPv(InitParameterRtti2* self, void* allocatorRtti, void* userData) {
+    self->allocatorRtti = allocatorRtti;
+    self->userData = userData;
 }
 
 int APS5_VABI _ZN3sce4Json11Initializer10initializeEPKNS0_14InitParameter2E(void* self, const InitParameter2* parameter) {
