@@ -60,6 +60,7 @@ static constexpr std::uint32_t SCE_NGS2_CUSTOM_MAX_PORTS = 16;
 static constexpr std::uint32_t SCE_NGS2_CUSTOM_MODULE_ID_USER_FX2 = 0x1f;
 
 static constexpr std::uint32_t SCE_NGS2_WAVEFORM_BLOCKS_FLAG_CONTINUE = 1;
+static constexpr std::uint32_t SCE_NGS2_WAVEFORM_BLOCKS_FLAG_APPEND = 2;
 static constexpr std::uint32_t SCE_NGS2_WAVEFORM_BLOCKS_FLAG_RESET = 4;
 
 static constexpr std::uint32_t SCE_NGS2_VOICE_CALLBACK_FLAG_BLOCK_END = 1;

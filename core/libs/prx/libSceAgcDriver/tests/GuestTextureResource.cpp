@@ -4,6 +4,7 @@
 #include <array>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -118,8 +119,21 @@ void RunGuestTextureResourceTests() {
     rejectFields(tileModes, "pipe/bank XOR base");
     tileModes.base40 = 0x120000ull;
     Require(DecodeTextureResource(pack(tileModes)).tileMode == TextureTileMode::RenderTarget64KB, "tile mode 0x1b must decode to render target 64KB");
+    constexpr std::array<std::pair<std::uint32_t, TextureTileMode>, 7> added{{{0x02, TextureTileMode::kD256B}, {0x06, TextureTileMode::kD4KB}, {0x0a, TextureTileMode::kD64KB}, {0x11, TextureTileMode::kS64KBT}, {0x12, TextureTileMode::kD64KBT}, {0x15, TextureTileMode::kS4KBX}, {0x16, TextureTileMode::kD4KBX}}};
+    for (const auto& [raw, mode] : added) {
+        tileModes.tileModeRaw = raw;
+        Require(DecodeTextureResource(pack(tileModes)).tileMode == mode, "tile mode " + std::to_string(raw) + " decoded to the wrong swizzle");
+    }
+    tileModes.tileModeRaw = 0x16;
+    tileModes.base40 = 0x120010ull;
+    Require(DecodeTextureResource(pack(tileModes)).tileMode == TextureTileMode::kD4KBX, "a 4 KiB XOR swizzle must accept a 4 KiB aligned base");
+    tileModes.base40 = 0x120011ull;
+    rejectFields(tileModes, "pipe/bank XOR base");
+    tileModes.tileModeRaw = 0x12;
+    tileModes.base40 = 0x120010ull;
+    rejectFields(tileModes, "pipe/bank XOR base");
     tileModes.base40 = base.base40;
-    tileModes.tileModeRaw = 0x02;
+    tileModes.tileModeRaw = 0x03;
     rejectFields(tileModes, "unsupported tile mode");
 
     Fields oneD = base;
@@ -145,6 +159,30 @@ void RunGuestTextureResourceTests() {
     Require(result.dimension == TextureDimension::k2DArray && result.depthOrLastArray == 3 && result.baseArray == 1, "2D array descriptor decoded incorrectly");
     array.baseArray = 5;
     rejectFields(array, "base array past its last array slice");
+
+    Fields oneDArray = base;
+    oneDArray.typeRaw = 12;
+    oneDArray.height = 1;
+    oneDArray.depth = 3;
+    oneDArray.baseArray = 2;
+    result = DecodeTextureResource(pack(oneDArray));
+    Require(result.dimension == TextureDimension::k1DArray && result.height == 1 && result.depthOrLastArray == 3 && result.baseArray == 2, "1D array descriptor decoded incorrectly");
+    Require(DescribeSurface(result).layers == 4, "1D array surface does not hold every array slice");
+    oneDArray.baseArray = 4;
+    rejectFields(oneDArray, "1D array texture descriptor has a base array past its last array slice");
+    oneDArray.baseArray = 0;
+    oneDArray.height = 2;
+    rejectFields(oneDArray, "1D array texture descriptor has a nonzero height");
+    oneDArray.height = 1;
+    oneDArray.base40 = 0x120000ull;
+    oneDArray.tileModeRaw = 0x18;
+    Require(DecodeTextureResource(pack(oneDArray)).tileMode == TextureTileMode::kZ64KBX, "1D array in SW_64KB_Z_X decoded incorrectly");
+    oneDArray.tileModeRaw = 0x1b;
+    Require(DecodeTextureResource(pack(oneDArray)).tileMode == TextureTileMode::kR64KBX, "1D array in SW_64KB_R_X decoded incorrectly");
+    oneDArray.tileModeRaw = 0x05;
+    rejectFields(oneDArray, "tile mode other than linear, Z or R");
+    oneDArray.tileModeRaw = 0x19;
+    rejectFields(oneDArray, "tile mode other than linear, Z or R");
 
     Fields cube = base;
     cube.typeRaw = 11;

@@ -44,6 +44,18 @@ bool AllKeysEqual(const std::uint8_t* keys, std::size_t count, std::uint8_t firs
     return true;
 }
 
+DccKeys ByteKeys(std::uint8_t key) {
+    switch (key) {
+        case 0x00: return DccKeys::Clear0000;
+        case 0x40: return DccKeys::Clear0001;
+        case 0x80: return DccKeys::Clear1110;
+        case 0xc0: return DccKeys::Clear1111;
+        case 0x20: return DccKeys::ClearRegister;
+        case 0xff: return DccKeys::Uncompressed;
+        default: return DccKeys::Mixed;
+    }
+}
+
 // APS5_PROFILE_DRAW: key scans, their bytes and time, printed as [dcc] every 10 s, with the hits of
 // the GPU-store memo below and the "uncompressed" key stores by where they were made. Flush syncs
 // stay 0 (no key read syncs the recorder); the field is kept so the line's shape does not change.
@@ -226,7 +238,7 @@ bool StoreUncompressedOnGpu(const Context& context, Recorder& recorder, std::uin
     // Queued on the open batch and recorded with the batch's other key stores as one run (or before
     // a later command writing the keys; see Recorder::QueueKeyStore).
     recorder.QueueKeyStore(import->buffer, first, last, std::move(seed), begin, begin + count);
-    recorder.NotePendingWrite(begin, count);
+    recorder.NotePendingFill(begin, count, 0xff);
     GuestMemory::MarkWritten(begin, count);
     // After the note: an unlocked memo lookup drops an entry the snapshot does not cover yet. The
     // entry is kept only for the active recorder (the one the flush hook and the lookups consult).
@@ -412,16 +424,7 @@ DccKeys readDccKeys(std::uint64_t metaAddress, std::uint64_t surfaceBytes, bool&
     const auto start = ScanProfileEnabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const bool uniform = AllKeysEqual(keys + 1, count - 1, first);
     if (ScanProfileEnabled()) CountScan(count, start);
-    if (!uniform) return DccKeys::Mixed;
-    switch (first) {
-        case 0x00: return DccKeys::Clear0000;
-        case 0x40: return DccKeys::Clear0001;
-        case 0x80: return DccKeys::Clear1110;
-        case 0xc0: return DccKeys::Clear1111;
-        case 0x20: return DccKeys::ClearRegister;
-        case 0xff: return DccKeys::Uncompressed;
-        default: return DccKeys::Mixed;
-    }
+    return uniform ? ByteKeys(first) : DccKeys::Mixed;
 }
 
 DccKeys textureClearKeys(const GuestTextureResource& resource, std::uint64_t guestBytes, bool& memoized) {
@@ -581,6 +584,65 @@ void ReadTextureSurface(const GuestTextureResource& resource, DccKeys keys, std:
     const GuestMemory::ReadSiteScope site(GuestMemory::ReadSite::TextureRead);
     if (keys == DccKeys::Uncompressed) GuestMemory::ReadCommitted(resource.baseAddress, bytes);
     else FillDccClear(ResolveTextureFormat(resource.format), keys, resource.dccAlphaOnMsb, bytes);
+}
+
+namespace {
+
+DccKeys EncodedKeys(const GuestTextureResource& resource, DccKeys keys) {
+    std::byte probe[16]{};
+    if (!IsDccClear(keys) || !FillDccClear(ResolveTextureFormat(resource.format), keys, resource.dccAlphaOnMsb, std::span(probe, std::min<std::size_t>(sizeof(probe), BytesPerElement(resource.format))))) return DccKeys::Uncompressed;
+    return keys;
+}
+
+bool PendingFillsLeaveUncompressed(const Recorder& recorder, const GuestTextureResource& resource, std::size_t count) {
+    const auto begin = resource.dccAddress;
+    if (!GuestMemory::Accessible(reinterpret_cast<const void*>(begin), count) || AnyShadowedOverlaps(begin, count)) return false;
+    auto writes = recorder.PendingWritesOver(begin, count);
+    std::sort(writes.begin(), writes.end(), [](const Recorder::PendingWrite& a, const Recorder::PendingWrite& b) { return a.note > b.note; });
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> unwritten{{begin, begin + count}};
+    int value = -1;
+    bool mixed = false;
+    const auto see = [&](int key) {
+        if (value < 0) value = key;
+        else if (value != key) mixed = true;
+    };
+    for (const auto& write : writes) {
+        if (mixed || unwritten.empty()) break;
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> rest;
+        bool covered = false;
+        for (const auto& [from, to] : unwritten) {
+            if (write.end <= from || to <= write.begin) {
+                rest.emplace_back(from, to);
+                continue;
+            }
+            covered = true;
+            if (from < write.begin) rest.emplace_back(from, write.begin);
+            if (write.end < to) rest.emplace_back(write.end, to);
+        }
+        unwritten = std::move(rest);
+        if (covered && write.value >= 0) see(write.value);
+    }
+    for (const auto& [from, to] : unwritten) {
+        if (mixed) break;
+        const auto* keys = reinterpret_cast<const std::uint8_t*>(from);
+        if (AllKeysEqual(keys + 1, static_cast<std::size_t>(to - from) - 1, keys[0])) see(keys[0]);
+        else mixed = true;
+    }
+    return mixed || (value >= 0 && EncodedKeys(resource, ByteKeys(static_cast<std::uint8_t>(value))) == DccKeys::Uncompressed);
+}
+
+}
+
+std::optional<DccKeys> WaitForKeyWriters(const GuestTextureResource& resource, std::uint64_t guestBytes) {
+    const auto count = static_cast<std::size_t>(guestBytes / KeyBytes);
+    const auto metaAddress = resource.dccAddress;
+    if (metaAddress == 0 || count == 0 || !GuestMemory::GpuMutex().HeldByThisThread()) return std::nullopt;
+    auto* recorder = Recorder::Active();
+    if (recorder == nullptr || !recorder->PendingWriteOverlaps(metaAddress, count) || PendingStoreKeys(*recorder, metaAddress, count).has_value()) return std::nullopt;
+    if (PendingFillsLeaveUncompressed(*recorder, resource, count)) return DccKeys::Uncompressed;
+    Recorder::CountSync(2);
+    recorder->SyncThrough(metaAddress, count);
+    return std::nullopt;
 }
 
 }

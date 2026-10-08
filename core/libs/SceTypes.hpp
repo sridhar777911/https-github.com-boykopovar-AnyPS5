@@ -1243,6 +1243,14 @@ struct Http2AsyncResult {
     void* reserved;
 };
 
+struct Http2AsyncOption {
+    KernelEqueue equeue;
+    int user_event_id;
+    std::uint8_t padding[4];
+    void* user_data;
+    void* reserved;
+};
+
 struct NpTitleId { char data[13]; char pad[3]; };
 struct NpTitleSecret { std::uint8_t data[128]; };
 struct NpContentRestriction { std::uint8_t opaque[128]; };

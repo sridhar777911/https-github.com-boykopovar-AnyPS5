@@ -403,6 +403,7 @@ target_include_directories(agc_driver_pm4_tests PRIVATE
 target_link_libraries(agc_driver_pm4_tests PRIVATE
         libSceAgcDriver
         libc
+        libkernel
 )
 
 set_target_properties(agc_driver_pm4_tests PROPERTIES CXX_EXTENSIONS OFF)
@@ -464,6 +465,7 @@ target_include_directories(agc_driver_graphics_tests PRIVATE
 target_link_libraries(agc_driver_graphics_tests PRIVATE
         shader_recompiler_agc_driver
         libc
+        libkernel
 )
 
 set_target_properties(agc_driver_graphics_tests PROPERTIES CXX_EXTENSIONS OFF)
@@ -521,7 +523,7 @@ foreach(agcExecutionTestSource IN LISTS agcExecutionTestSources)
 endforeach()
 
 if(BUILD_TESTING)
-    foreach(agcTest IN ITEMS agc_driver_tests agc_shader_memory_tests agc_structurizer_tests agc_spirv_module_tests agc_dpp_write_tests agc_masked_select_tests agc_vop1_control_decode_tests agc_validate_program_tests agc_shader_disk_cache_tests agc_shader_control_flow_tests agc_driver_flip_tests agc_driver_pm4_tests agc_driver_graphics_tests ${agcExecutionTests})
+    foreach(agcTest IN ITEMS agc_driver_tests agc_shader_memory_tests agc_structurizer_tests agc_spirv_module_tests agc_dpp_write_tests agc_masked_select_tests agc_vop1_control_decode_tests agc_validate_program_tests agc_shader_disk_cache_tests agc_shader_control_flow_tests agc_driver_flip_tests agc_driver_pm4_tests agc_driver_graphics_tests agc_driver_bda_device_tests ${agcExecutionTests})
         string(REGEX REPLACE "_tests$" "" agcTestName "${agcTest}")
         set_target_properties(${agcTest} PROPERTIES EXCLUDE_FROM_ALL OFF)
         add_test(NAME ${agcTestName} COMMAND ${agcTest})

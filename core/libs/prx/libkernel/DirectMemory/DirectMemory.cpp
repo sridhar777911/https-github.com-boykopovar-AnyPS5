@@ -18,6 +18,7 @@
 #include <vector>
 
 #if defined(__linux__)
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <fstream>
@@ -233,17 +234,26 @@ public:
             throw std::system_error(error, std::system_category(), message);
         }
 #else
-        file = memfd_create("direct memory", MFD_CLOEXEC);
+        file = memfd_create("direct memory", MFD_CLOEXEC | MFD_ALLOW_SEALING);
         if (file < 0) throw std::system_error(errno, std::generic_category(), "create direct memory backing");
         if (ftruncate(file, static_cast<off_t>(bytes)) != 0) {
             const int error = errno;
             ::close(file);
             throw std::system_error(error, std::generic_category(), "size direct memory backing");
         }
+        if (fcntl(file, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW) != 0) {
+            const int error = errno;
+            ::close(file);
+            throw std::system_error(error, std::generic_category(), "seal direct memory backing");
+        }
 #endif
     }
 
     int MemoryType() const { return memoryType; }
+
+#if defined(__linux__)
+    int File() const { return file; }
+#endif
 
     ~PhysicalBacking() {
 #ifdef _WIN32
@@ -350,6 +360,32 @@ void WatchMapping(std::uintptr_t address, std::size_t len) {
             GuestWriteWatch::GuestWriteWatchUnregister_nid_postfix(reinterpret_cast<const void*>(base + (first - other.phys)), last - first);
         }
     }
+}
+#endif
+
+#if defined(__linux__)
+bool SharedBacking(std::uintptr_t address, std::size_t bytes, int* file, std::uint64_t* offset) {
+    std::lock_guard lock(g_directLock);
+    const auto next = g_directMappings.upper_bound(address);
+    if (bytes == 0 || bytes > std::numeric_limits<std::uintptr_t>::max() - address || next == g_directMappings.begin()) return false;
+    auto it = std::prev(next);
+    if (address >= it->second.end) return false;
+    const auto backing = it->second.backing;
+    const auto phys = it->second.phys + (address - it->first);
+    const auto page = g_physPages.find(phys - phys % PS5_PAGE_SIZE);
+    if (page == g_physPages.end() || page->second.backing != backing) return false;
+    const auto end = address + bytes;
+    for (auto covered = it->second.end; covered < end;) {
+        const auto following = std::next(it);
+        if (following == g_directMappings.end() || following->first != covered || following->second.backing != backing || following->second.phys != it->second.phys + (it->second.end - it->first)) return false;
+        it = following;
+        covered = it->second.end;
+    }
+    const int duplicate = fcntl(backing->File(), F_DUPFD_CLOEXEC, 0);
+    if (duplicate < 0) throw std::system_error(errno, std::generic_category(), "duplicate direct memory backing");
+    *file = duplicate;
+    *offset = page->second.offset + phys % PS5_PAGE_SIZE;
+    return true;
 }
 #endif
 
@@ -754,6 +790,10 @@ void CreateDirectMemoryBacking(int64_t start, size_t len, int memoryType) {
     for (std::size_t offset = 0; offset < len; offset += PS5_PAGE_SIZE) {
         if (g_physPages.contains(first + offset)) throw std::runtime_error("physical allocation overlaps live direct memory");
     }
+#if defined(__linux__)
+    static std::once_flag registered;
+    std::call_once(registered, [] { GuestArena::GuestArenaSetSharedBacking_nid_postfix(&SharedBacking); });
+#endif
     const auto backing = std::make_shared<PhysicalBacking>(len, memoryType);
     std::map<std::uint64_t, PhysicalPage> pages;
     for (std::size_t offset = 0; offset < len; offset += PS5_PAGE_SIZE) pages.emplace(first + offset, PhysicalPage{backing, offset});

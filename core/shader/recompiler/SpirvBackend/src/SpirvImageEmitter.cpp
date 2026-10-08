@@ -623,14 +623,26 @@ std::uint32_t UnpackImageGather(SpirvValueEmitContext& ctx, const ImageEmitAcces
 std::uint32_t EmitOneDimensionalGatherLz(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, const SampleSetup& setup) {
     auto& state = ctx.state;
     const auto numericClass = access.image.numericClass;
+    const bool arrayed = access.image.dimension == RdnaImageDimension::Dim1DArray;
     state.module.EmitCapability(spv::CapabilityImageQuery);
     const auto image = LoadSampledImageDescriptor(state, access.mem.resource, access.slot);
-    const auto width = state.module.AllocateId();
-    state.module.AddFunction(spv::OpImageQuerySizeLod, TypeU32(state), width, image, ConstantU32(state, 0));
+    auto width = state.module.AllocateId();
+    state.module.AddFunction(spv::OpImageQuerySizeLod, arrayed ? TypeU32Vector(state, 2) : TypeU32(state), width, image, ConstantU32(state, 0));
+    auto coord = setup.coord;
+    std::uint32_t layer = 0;
+    if (arrayed) {
+        const auto size = width;
+        width = state.module.AllocateId();
+        state.module.AddFunction(spv::OpCompositeExtract, TypeU32(state), width, size, 0u);
+        coord = state.module.AllocateId();
+        state.module.AddFunction(spv::OpCompositeExtract, TypeF32(state), coord, setup.coord, 0u);
+        layer = state.module.AllocateId();
+        state.module.AddFunction(spv::OpCompositeExtract, TypeF32(state), layer, setup.coord, 1u);
+    }
     const auto widthF32 = state.module.AllocateId();
     state.module.AddFunction(spv::OpConvertUToF, TypeF32(state), widthF32, width);
     auto left = state.module.AllocateId();
-    state.module.AddFunction(spv::OpExtInst, TypeF32(state), left, GlslStd450(state), GLSLstd450Floor, Binary(state, spv::OpFSub, TypeF32(state), Binary(state, spv::OpFMul, TypeF32(state), setup.coord, widthF32), ConstantF32(state, 0x3f000000u)));
+    state.module.AddFunction(spv::OpExtInst, TypeF32(state), left, GlslStd450(state), GLSLstd450Floor, Binary(state, spv::OpFSub, TypeF32(state), Binary(state, spv::OpFMul, TypeF32(state), coord, widthF32), ConstantF32(state, 0x3f000000u)));
     if (setup.layout.offset != NoImageComponent) {
         left = Binary(state, spv::OpFAdd, TypeF32(state), left, Unary(state, spv::OpConvertSToF, TypeF32(state), PackedOffset(ctx, access, setup.layout)));
     }
@@ -640,7 +652,12 @@ std::uint32_t EmitOneDimensionalGatherLz(SpirvValueEmitContext& ctx, const Image
     const auto component = ImageConversionFormat(access.image).format == IrBufferFormat::Invalid ? ImageGatherComponent(EffectiveDmask(access.mem)) : 0u;
     std::uint32_t values[2] = {};
     for (std::uint32_t index = 0; index < 2u; index++) {
-        const auto sampleCoord = Binary(state, spv::OpFDiv, TypeF32(state), Binary(state, spv::OpFAdd, TypeF32(state), left, ConstantF32(state, index == 0u ? 0x3f000000u : 0x3fc00000u)), widthF32);
+        auto sampleCoord = Binary(state, spv::OpFDiv, TypeF32(state), Binary(state, spv::OpFAdd, TypeF32(state), left, ConstantF32(state, index == 0u ? 0x3f000000u : 0x3fc00000u)), widthF32);
+        if (arrayed) {
+            const auto pair = state.module.AllocateId();
+            state.module.AddFunction(spv::OpCompositeConstruct, TypeF32Vector(state, 2), pair, sampleCoord, layer);
+            sampleCoord = pair;
+        }
         const auto texel = state.module.AllocateId();
         state.module.AddFunction(spv::OpImageSampleExplicitLod, vectorType, texel, sampled, sampleCoord, spv::ImageOperandsLodMask, ZeroF32(state));
         values[index] = state.module.AllocateId();
@@ -957,16 +974,13 @@ void EmitGatherOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
     if (setup.dref && (access.image.emulatedCompare & EmulatedCompare::Enabled) != 0u) {
         ctx.Fail(access.inst, "is a comparison gather of a color texture, which is not implemented");
     }
-    if (dimension == RdnaImageDimension::Dim1D) {
+    if (dimension == RdnaImageDimension::Dim1D || dimension == RdnaImageDimension::Dim1DArray) {
         if (setup.dref || !HasFlag(mem, RdnaImageSampleFlagLevelZero) || HasFlag(mem, RdnaImageSampleFlagGatherHorizontal)) {
             ctx.Fail(access.inst, "has an unsupported 1D gather variant");
         }
         const auto sample = EmitOneDimensionalGatherLz(ctx, access, setup);
         ctx.Define(access.inst, TableResult(ctx, access, ResultVector(ctx, access, UnpackImageGather(ctx, access, sample), setup.numericClass, false, true)));
         return;
-    }
-    if (dimension == RdnaImageDimension::Dim1DArray) {
-        ctx.Fail(access.inst, "has an unsupported 1D-array gather");
     }
     const auto sampled = MakeSampledImage(state, mem.resource, mem.sampler, access.slot);
     const auto sample = state.module.AllocateId();

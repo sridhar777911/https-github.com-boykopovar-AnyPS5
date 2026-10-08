@@ -98,7 +98,26 @@ public:
             Require(count != 0, "no Vulkan device");
             std::vector<VkPhysicalDevice> devices(count);
             Check(enumerate(instance, &count, devices.data()), "vkEnumeratePhysicalDevices");
-            context.physical = devices.front();
+            const auto rankDeviceType = [](VkPhysicalDeviceType type) {
+                switch (type) {
+                    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return 3;
+                    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 2;
+                    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: return 1;
+                    default: return 0;
+                }
+            };
+            const auto physicalProperties = function<PFN_vkGetPhysicalDeviceProperties>("vkGetPhysicalDeviceProperties");
+            int selectedRank = -1;
+            for (const auto physical : devices) {
+                VkPhysicalDeviceProperties candidate{};
+                physicalProperties(physical, &candidate);
+                if (candidate.apiVersion < VK_API_VERSION_1_1) continue;
+                const int rank = rankDeviceType(candidate.deviceType);
+                if (rank <= selectedRank) continue;
+                context.physical = physical;
+                selectedRank = rank;
+            }
+            Require(context.physical != VK_NULL_HANDLE, "no Vulkan 1.1 device");
             const auto extensions = function<PFN_vkEnumerateDeviceExtensionProperties>("vkEnumerateDeviceExtensionProperties");
             Check(extensions(context.physical, nullptr, &count, nullptr), "vkEnumerateDeviceExtensionProperties");
             std::vector<VkExtensionProperties> available(count);
@@ -133,6 +152,11 @@ public:
                 VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &hostProperties};
                 function<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")(context.physical, &properties);
                 context.hostImportAlignment = hostProperties.minImportedHostPointerAlignment;
+            }
+            if (hasExtension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) && hasExtension(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME)) {
+                extensionsEnabled.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+                extensionsEnabled.push_back(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+                context.dmaBufImport = true;
             }
             VkPhysicalDeviceImageViewMinLodFeaturesEXT minLod{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_VIEW_MIN_LOD_FEATURES_EXT};
             if (hasExtension(VK_EXT_IMAGE_VIEW_MIN_LOD_EXTENSION_NAME)) {
@@ -186,7 +210,10 @@ private:
     void release() noexcept {
         if (context.pool != VK_NULL_HANDLE) context.Function<PFN_vkDestroyCommandPool>("vkDestroyCommandPool")(context.device, context.pool, nullptr);
         context.bufferPool.reset();
-        if (context.device != VK_NULL_HANDLE) function<PFN_vkDestroyDevice>("vkDestroyDevice")(context.device, nullptr);
+        if (context.device != VK_NULL_HANDLE) {
+            DestroyShadows(context.device);
+            function<PFN_vkDestroyDevice>("vkDestroyDevice")(context.device, nullptr);
+        }
         if (instance != VK_NULL_HANDLE) function<PFN_vkDestroyInstance>("vkDestroyInstance")(instance, nullptr);
         if (library != nullptr) SDL_UnloadObject(library);
     }
@@ -696,6 +723,45 @@ void storeRunTests(const Device& device, Recorder& recorder) {
     recorder.NoteAccess(Recorder::CommandClass::DispatchLeading, Recorder::Access{std::span(&range, 1), {}, {}, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT});
     Require(recorder.Recording() == Recorder::BarrierValidate(), "a noted access opened a batch with the tracker off (or none with it on)");
     recorder.Sync();
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Remove(block);
+    }
+    HostImportFor(context, address, bytes);
+}
+
+void remappedImportTests(const Device& device) {
+    const auto& context = device.GetContext();
+    if (context.hostImportAlignment == 0) {
+        std::cout << "host imports unavailable: remapped imports not tested\n";
+        return;
+    }
+    constexpr std::size_t bytes = 65536;
+#ifdef _WIN32
+    void* block = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+    void* block = std::aligned_alloc(65536, bytes);
+#endif
+    Require(block != nullptr, "cannot allocate the remap test block");
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, bytes, true, true);
+    }
+    if (HostImportFor(context, address, bytes) == nullptr) {
+        std::cout << "host import of the remap test block refused: remapped imports not tested\n";
+        return;
+    }
+    const auto first = HostImportSerial(context, address, bytes, true);
+    Require(first != 0 && HostImportSerial(context, address, bytes, true) == first, "an unchanged range lost its import");
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Remove(block);
+        mutation.Add(block, bytes, true, true);
+    }
+    Require(HostImportFor(context, address, bytes) != nullptr, "the remapped range was not imported again");
+    const auto second = HostImportSerial(context, address, bytes, true);
+    Require(second != 0 && second != first, "the import of a range mapped again was kept");
     {
         GuestAllocations::Mutation mutation;
         mutation.Remove(block);
@@ -1629,6 +1695,15 @@ void importWatchTests(const Device& device) {
     const auto probe = ProbeImportWriteProtection(context);
     Require(probe.failure == nullptr, std::string("(u) the import probe failed at ") + (probe.failure != nullptr ? probe.failure : "") + " (" + std::to_string(static_cast<int>(probe.result)) + ")");
     std::cout << "import probe: " << probe.writtenAfterSubmit << " of " << probe.pages << " scratch pages written after a GPU read, " << probe.writtenAtImport << " after the import\n";
+    Require(probe.writtenByCpu != 0, "(u) a CPU store after the import probe's GPU read was not collected");
+    if (context.dmaBufImport) {
+        const auto dmaBuf = ProbeDmaBufImportWriteProtection(context);
+        Require(dmaBuf.failure == nullptr, std::string("(u) the dma-buf import probe failed at ") + (dmaBuf.failure != nullptr ? dmaBuf.failure : "") + " (" + std::to_string(static_cast<int>(dmaBuf.result)) + ")");
+        Require(dmaBuf.writtenByCpu != 0, "(u) a CPU store into a dma-buf imported scratch range was not collected");
+        std::cout << "dma-buf import probe: " << dmaBuf.writtenAfterSubmit << " of " << dmaBuf.pages << " scratch pages written after a GPU read, " << dmaBuf.writtenAtImport << " after the import, " << dmaBuf.writtenByCpu << " after a CPU store\n";
+    } else {
+        std::cout << "dma-buf imports unavailable: the dma-buf import probe not tested\n";
+    }
     const auto decided = PrepareImportWatch(context);
     struct Restore {
         const Context& context;
@@ -1983,6 +2058,10 @@ void importWindowTests(const Device& device, Recorder& recorder) {
     Require(probe.failure == nullptr, "(w) the import probe failed");
     const bool importWrites = probe.writtenAtImport != 0;
     const auto decided = PrepareImportWatch(base);
+    if (decided == ImportWatch::Unwatch) {
+        std::cout << "host imports are compared, not watched: the import window not tested\n";
+        return;
+    }
     SetImportWatch(base, ImportWatch::Watch);
     struct Restore {
         const Context& context;
@@ -2522,7 +2601,12 @@ void minLodTests(const Device& device, Recorder& recorder) {
     const auto unorm = [&](std::size_t level) { return levels[level] / 255.0f; };
     expectRed(sample(0, 0.0f), unorm(0), "minimum LOD clamp: no clamp reads level 0");
     expectRed(sample(0x100, 0.0f), unorm(1), "minimum LOD clamp: MIN_LOD 1 reads level 1 at LOD 0");
-    expectRed(sample(0x180, 0.0f), (unorm(1) + unorm(2)) / 2.0f, "minimum LOD clamp: MIN_LOD 1.5 blends levels 1 and 2");
+    const auto fractional = sample(0x180, 0.0f);
+    if (std::abs(fractional - unorm(1)) <= 1.5f / 255.0f) {
+        std::cout << "minimum LOD clamp: the device takes the integer part of a fractional view minimum LOD\n";
+    } else {
+        expectRed(fractional, (unorm(1) + unorm(2)) / 2.0f, "minimum LOD clamp: MIN_LOD 1.5 blends levels 1 and 2");
+    }
     expectRed(sample(0x100, 2.0f), unorm(2), "minimum LOD clamp: MIN_LOD 1 lowered LOD 2");
     expectRed(sample(0xfff, 0.0f), unorm(3), "minimum LOD clamp: MIN_LOD past the last level reads the last level");
     expectRed(sample(0x200, 0.0f, 1), unorm(2), "minimum LOD clamp: MIN_LOD 2 over a view from level 1 reads level 2");
@@ -2699,15 +2783,20 @@ void keysFillTests(const Device& device, Recorder& recorder) {
             }
             return true;
         };
+        const auto fill = [&](std::uint8_t key) {
+            recorder.Sync();
+            std::memset(keys, key, keyCount);
+            return StorageTexture::NoteKeysFill(keysAddress, keyCount, key);
+        };
         Require(holds({0, 0, 0, 0}), "a surface under 0000 keys was not cleared");
         draw({{1.0f, 0.0f, 0.0f, 1.0f}});
-        Require(StorageTexture::NoteKeysFill(keysAddress, keyCount, 0x00) == 1, "a 0000 key fill did not cover the surface");
+        Require(fill(0x00) == 1, "a 0000 key fill did not cover the surface");
         Require(image->FilledKeys() == DccKeys::Clear0000, "a key fill over pending results was not recorded");
         image->Refresh();
         Require(holds({0, 0, 0, 0}), "a key fill did not clear the results made before it at the next refresh");
         Require(image->FilledKeys() == DccKeys::Uncompressed, "the image cleared by a refresh still holds the fill");
         draw({{0.0f, 0.0f, 1.0f, 1.0f}});
-        Require(StorageTexture::NoteKeysFill(keysAddress, keyCount, 0x00) == 1, "a second 0000 key fill did not cover the surface");
+        Require(fill(0x00) == 1, "a second 0000 key fill did not cover the surface");
 #ifdef _WIN32
         _putenv_s("APS5_KEYS_FILL_CLEAR", "1");
 #else
@@ -2747,6 +2836,7 @@ int main() {
         drawInputReuseTests(device, recorder);
         RunResidentPresentTests(device.GetContext());
         storeRunTests(device, recorder);
+        remappedImportTests(device);
         movedMetadataTests(device, recorder);
         viewPastLastMipTests(device, recorder);
         keysFillTests(device, recorder);

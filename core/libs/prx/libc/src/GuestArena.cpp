@@ -1,6 +1,7 @@
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/WindowsMappings.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
@@ -266,5 +267,22 @@ void GuestArenaEndHostWrite_nid_postfix(void* pointer, std::size_t bytes) {
     (void)bytes;
 #endif
 }
+
+#ifndef _WIN32
+namespace {
+
+std::atomic<SharedBackingResolver> sharedBackingResolver{nullptr};
+
+}
+
+void GuestArenaSetSharedBacking_nid_postfix(SharedBackingResolver resolver) {
+    sharedBackingResolver.store(resolver, std::memory_order_release);
+}
+
+bool GuestArenaSharedBacking_nid_postfix(std::uintptr_t address, std::size_t bytes, int* file, std::uint64_t* offset) {
+    const auto resolver = sharedBackingResolver.load(std::memory_order_acquire);
+    return resolver != nullptr && resolver(address, bytes, file, offset);
+}
+#endif
 
 }

@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
+#include "prx/libSceAgcDriver/Execution/include/Pm4.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/TextureTiling.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DccMetadata.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/TextureFormat.hpp"
@@ -906,7 +907,7 @@ void ShaderResources::buildPrepare(std::span<const CompiledShader> shaders, cons
                 Require(binding.descriptorSet == 0, "unexpected descriptor set: every shader resource must use descriptor set zero");
                 Require(occupied.insert(binding.binding).second, "duplicate shader binding");
                 const bool addressRole = binding.role == ShaderRecompiler::DescriptorRole::BdaPagetable || binding.role == ShaderRecompiler::DescriptorRole::FaultBuffer;
-                const bool bufferRole = addressRole || binding.role == ShaderRecompiler::DescriptorRole::GuestBuffers || binding.role == ShaderRecompiler::DescriptorRole::ShaderData || binding.role == ShaderRecompiler::DescriptorRole::FlattenedSrt;
+                const bool bufferRole = addressRole || binding.role == ShaderRecompiler::DescriptorRole::GuestBuffers || binding.role == ShaderRecompiler::DescriptorRole::ShaderData || binding.role == ShaderRecompiler::DescriptorRole::FlattenedSrt || binding.role == ShaderRecompiler::DescriptorRole::Gds;
                 const bool imageRole = binding.role == ShaderRecompiler::DescriptorRole::GuestImages || binding.role == ShaderRecompiler::DescriptorRole::GuestSamplers;
                 if (imageRole) {
                     if (binding.kind == ShaderRecompiler::DescriptorKind::SampledImage || binding.kind == ShaderRecompiler::DescriptorKind::StorageImage) stageResources += binding.count;
@@ -945,6 +946,12 @@ void ShaderResources::buildPrepare(std::span<const CompiledShader> shaders, cons
                 } else if (addressRole) {
                     item.allocations.push_back(allocations.size());
                     allocations.push_back({0, 0, false, nullptr, binding.role});
+                } else if (binding.role == ShaderRecompiler::DescriptorRole::Gds) {
+                    Require(binding.count == 1 && binding.guestDescriptor.empty(), "invalid GDS descriptor contract");
+                    const auto gds = Pm4::GdsAddress();
+                    guestMemory.AddWritable(gds, Pm4::GdsBytes, true);
+                    item.allocations.push_back(allocations.size());
+                    allocations.push_back({gds, Pm4::GdsBytes, true, nullptr, ShaderRecompiler::DescriptorRole::ShaderData, true});
                 } else {
                     Require(binding.count == 1, "shader data and flattened SRT descriptors must not be arrays");
                     Require(!binding.guestDescriptor.empty(), "empty shader data descriptor");
@@ -1462,7 +1469,7 @@ bool ShaderResources::fastRevalidate(std::uint64_t serialBefore, std::span<const
             // since its generation (the query below). The surface's own keys come from the same
             // proof when they are the image's, else from the texture's.
             const auto& own = source->Descriptor();
-            const auto sourceKeys = own.dccAddress != 0 ? ProvedClearKeys(own, source->GuestBytes(), source->KeyProof()) : DccKeys::Uncompressed;
+            const auto sourceKeys = source->ProvedKeys();
             if (sourceKeys != source->UploadedKeys()) return fail(FastFail::Keys);
             const auto keys = surface.resource.dccAddress == 0 ? DccKeys::Uncompressed : SameKeySurface(source, surface.resource, surface.bytes) ? sourceKeys : ProvedClearKeys(surface.resource, surface.bytes, textures[i]->KeyProof());
             if (surface.resource.dccAddress != 0 && surface.resource.dccAddress != own.dccAddress && (keys != DccKeys::Uncompressed || !StorageImageServesKeys(*source, surface.resource.dccAddress))) return fail(FastFail::Keys);
@@ -1504,7 +1511,7 @@ bool ShaderResources::fastRevalidate(std::uint64_t serialBefore, std::span<const
             // Refresh's unchanged branch (its key compare against the keys the content was
             // uploaded under, through the image's proof; the memory query below), minus its
             // byte-compare fallback; the image's generation is left where it is.
-            if (!keyProofs || ProvedClearKeys(own, bytes, image->KeyProof()) != image->UploadedKeys()) return fail(FastFail::StorageKeys);
+            if (!keyProofs || image->ProvedKeys() != image->UploadedKeys()) return fail(FastFail::StorageKeys);
             countKeysProven(true);
         }
         if (!unchanged) query(address, address + bytes, image, nullptr, {i, true, false});
@@ -2118,6 +2125,7 @@ namespace {
 // What one chain pool holds; a set needing more of any type gets a dedicated pool.
 constexpr std::uint32_t ChainPoolSets = 1024;
 constexpr std::array<VkDescriptorPoolSize, 4> ChainPoolSizes{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024}, {VK_DESCRIPTOR_TYPE_SAMPLER, 512}}};
+constexpr std::array<VkDescriptorPoolSize, 4> ChainPoolCreateSizes{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4096 + 2}, {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024}, {VK_DESCRIPTOR_TYPE_SAMPLER, 512}}};
 }
 
 DescriptorCache::SetAllocation DescriptorCache::Allocate(VkDescriptorSetLayout layout, std::span<const VkDescriptorPoolSize> sizes) {
@@ -2145,8 +2153,8 @@ DescriptorCache::SetAllocation DescriptorCache::Allocate(VkDescriptorSetLayout l
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.maxSets = ChainPoolSets;
-    poolInfo.poolSizeCount = static_cast<std::uint32_t>(ChainPoolSizes.size());
-    poolInfo.pPoolSizes = ChainPoolSizes.data();
+    poolInfo.poolSizeCount = static_cast<std::uint32_t>(ChainPoolCreateSizes.size());
+    poolInfo.pPoolSizes = ChainPoolCreateSizes.data();
     VkDescriptorPool pool = VK_NULL_HANDLE;
     Check(context.Function<PFN_vkCreateDescriptorPool>("vkCreateDescriptorPool")(context.device, &poolInfo, nullptr, &pool), "vkCreateDescriptorPool");
     pools.push_back(pool);
