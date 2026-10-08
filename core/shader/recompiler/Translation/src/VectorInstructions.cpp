@@ -539,9 +539,9 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
     case RdnaOpcode::VSatPkU8I16:
         return vSatPkU8I16(inst);
     case RdnaOpcode::VMulLegacyF32:
-        return vMulLegacyF32(inst, false);
+        return vMulLegacyF32(inst);
     case RdnaOpcode::VMacLegacyF32:
-        return vMulLegacyF32(inst, true);
+        return vFmaLegacyF32(inst, true);
     case RdnaOpcode::VMullitF32:
         return vMullitF32(inst);
     case RdnaOpcode::VCmpClassF32:
@@ -958,7 +958,7 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
     case RdnaOpcode::VFmaF32:
         return floatTernary(inst, roundsProductSeparately(inst) ? IrOpcode::FPMad32 : IrOpcode::FPFma32, false, true);
     case RdnaOpcode::VMadLegacyF32:
-        return vFmaLegacyF32(inst);
+        return vFmaLegacyF32(inst, false);
     case RdnaOpcode::VMin3F32:
         return floatTernary(inst, IrOpcode::FPMinTri32, false, false);
     case RdnaOpcode::VMax3F32:
