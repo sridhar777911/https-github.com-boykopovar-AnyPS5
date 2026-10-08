@@ -32,6 +32,27 @@ int main() {
         coverage.Initialize(base, 2 * block);
         require(coverage.Exclude(base - 1, 2) && !coverage.Covers(base, block), "an import crossing the arena start was not clipped");
         require(coverage.Covers(base + block, block), "clipping an import excluded the rest of the arena");
+        coverage.Initialize(base, 4 * block + 1);
+        coverage.Exclude(base, 4 * block + 1);
+        require(!coverage.Restore(base + 1, block - 1) && !coverage.Covers(base, block), "a partial replacement restored an excluded block");
+        require(coverage.Restore(base + block, block) && coverage.Covers(base + block, block), "fresh private backing stayed excluded");
+        require(!coverage.Restore(base + block, block), "restoring an already watched block reports a change");
+        require(!coverage.Covers(base, block) && !coverage.Covers(base + 2 * block, block), "restoring one block restored its neighbours");
+        require(coverage.Restore(base + block - 1, 2 * block + 2), "a full interior replacement was not restored");
+        require(!coverage.Covers(base, block) && coverage.Covers(base + block, 2 * block) && !coverage.Covers(base + 3 * block, block), "a replacement restored partially covered boundary blocks");
+        require(!coverage.Restore(base - block, block) && !coverage.Restore(base + 5 * block, block), "an outside replacement changed coverage");
+        require(coverage.Restore(base + 3 * block, std::numeric_limits<std::size_t>::max()) && coverage.Covers(base + 3 * block, block + 1), "an oversized replacement was not clipped to the arena");
+        require(coverage.Restore(base - block, 2 * block) && coverage.Covers(base, block), "a replacement across the arena start was not clipped");
+        coverage.Exclude(base + block + 4096, 1);
+        require(!coverage.Covers(base + block, block), "a re-import did not exclude fresh backing again");
+        coverage.Initialize(base, 2 * block);
+        coverage.Exclude(base, block, 4);
+        require(!coverage.Restore(base, block, 3) && !coverage.Restore(base, block, 4), "a stale mapping notification restored a newer import");
+        require(coverage.Restore(base, block, 5) && coverage.Covers(base, block), "a newer private mapping did not restore an older exclusion");
+        coverage.Exclude(base, block, 5);
+        coverage.Exclude(base, block, 7);
+        require(!coverage.Restore(base, block, 6) && !coverage.Covers(base, block), "a delayed mapping notification erased a repeated import");
+        require(coverage.Restore(base, block, 8), "a fresh replacement did not restore the latest import exclusion");
         std::cout << "write watch coverage passed\n";
         return 0;
     } catch (const std::exception& error) {

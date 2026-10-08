@@ -141,6 +141,40 @@ void CheckUnwatch() {
     CollectWritesUncached(base, Block);
     Require(!UnchangedSince(base, Block, adjacent), "unwatch hid a CPU edit in unrelated memory");
 }
+
+#ifdef _WIN32
+void CheckPrivateMappingReuse() {
+    void* memory = AllocateWatched(3 * Block);
+    const auto base = reinterpret_cast<std::uint64_t>(memory);
+    std::memset(memory, 0x11, 3 * Block);
+    BumpCollectEpoch();
+    const auto before = CollectWrites(base, 3 * Block);
+    Require(before != 0, "the original backing was not collected");
+    Unwatch(base + Block, Block);
+    Require(!Watched(base + Block, Block), "the imported block stayed watched");
+    GuestArena::GuestArenaCommit_nid_postfix(memory, 3 * Block, PAGE_READWRITE, 3 * Block);
+    Require(!Watched(base + Block, Block), "a protection-only commit restored an imported block");
+    const auto neighbour = CollectWrites(base, Block);
+    Require(neighbour != 0, "the neighbouring block was not collected before remapping");
+    GuestArena::GuestArenaReset_nid_postfix(memory, 3 * Block);
+    GuestArena::GuestArenaRelease_nid_postfix(memory, 3 * Block);
+    auto* replacement = GuestArena::GuestArenaAllocateAtOrAbove_nid_postfix(base, 3 * Block, Block);
+    Require(replacement == memory, "the released arena address was not reused");
+    GuestArena::GuestArenaCommit_nid_postfix(replacement, 3 * Block, PAGE_READWRITE, 3 * Block);
+    Require(Watched(base, 3 * Block), "fresh backing at an excluded address is not watched");
+    Require(!UnchangedSince(base + Block, Block, before), "fresh backing reused an old import generation");
+    Require(!UnchangedSince(base, Block, neighbour), "fresh backing reused an adjacent block's old generation");
+    const auto after = CollectWrites(base, 3 * Block);
+    Require(after > before && UnchangedSince(base, 3 * Block, after), "fresh backing was not collected");
+    static_cast<volatile std::uint8_t*>(replacement)[Block + 8] = 0x22;
+    CollectWritesUncached(base, 3 * Block);
+    Require(!UnchangedSince(base + Block, Block, after), "a CPU edit in fresh backing was missed");
+    Unwatch(base + Block, Block);
+    Require(!Watched(base + Block, Block) && CollectWrites(base + Block, Block) == 0, "a second import of fresh backing stayed watched");
+    GuestArena::GuestArenaReset_nid_postfix(replacement, 3 * Block);
+    GuestArena::GuestArenaRelease_nid_postfix(replacement, 3 * Block);
+}
+#endif
 }
 
 int main() {
@@ -152,6 +186,9 @@ int main() {
         CheckSharedBlock();
         CheckOwnStore();
         CheckUnwatch();
+#ifdef _WIN32
+        CheckPrivateMappingReuse();
+#endif
     } catch (const std::exception& error) {
         std::cerr << "write tracking test failed: " << error.what() << "\n";
         return 1;
