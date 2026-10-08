@@ -298,6 +298,7 @@ DecodedColorFormat DecodeColorFormat(std::uint32_t format, std::uint32_t number,
             if (number == unorm) return single(VK_FORMAT_R8_UNORM, 1);
             if (number == snorm) return single(VK_FORMAT_R8_SNORM, 1);
             if (number == uint) return single(VK_FORMAT_R8_UINT, 1);
+            if (number == srgb && swap == 0) return single(VK_FORMAT_R8_SRGB, 1);
             return fail();
         case 2:
             if (number == unorm) return single(VK_FORMAT_R16_UNORM, 2);

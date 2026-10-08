@@ -154,9 +154,15 @@ static void CheckInternalNamedFlexibleMapping() {
     Require(sceKernelAvailableFlexibleMemorySize(&available) == 0 && available == before - length);
     Require(sceKernelMunmap(mapped, length) == 0);
     Require(sceKernelAvailableFlexibleMemorySize(&available) == 0 && available == before);
+    void* flagged = nullptr;
+    Require(sceKernelMapNamedFlexibleMemoryInternal(&flagged, length, 3, 0x8000, "internal flag") == 0 && flagged != nullptr);
+    Require(std::strcmp(NameAt(flagged), "internal flag") == 0);
+    static_cast<volatile unsigned char*>(flagged)[length - 1] = 1;
+    Require(sceKernelAvailableFlexibleMemorySize(&available) == 0 && available == before - length);
+    Require(sceKernelMunmap(flagged, length) == 0);
     bool rejected = false;
     void* unknown = nullptr;
-    try { sceKernelMapNamedFlexibleMemoryInternal(&unknown, length, 3, 0x8000, "internal mapping"); } catch (const std::exception&) { rejected = true; }
+    try { sceKernelMapNamedFlexibleMemoryInternal(&unknown, length, 3, 0x20000, "internal mapping"); } catch (const std::exception&) { rejected = true; }
     Require(rejected && unknown == nullptr);
     Require(sceKernelAvailableFlexibleMemorySize(&available) == 0 && available == before);
 }

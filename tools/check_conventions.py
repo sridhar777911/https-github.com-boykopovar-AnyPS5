@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import posixpath
 import re
 import subprocess
 from collections import defaultdict
@@ -186,7 +187,7 @@ def links(path, text):
         if re.match(r"[a-z]+:|#", target):
             continue
         target = target.split("#", 1)[0].split("?", 1)[0]
-        result.append((target, os.path.normpath(target.lstrip("/") if target.startswith("/") else str(PurePosixPath(path).parent / target))))
+        result.append((target, posixpath.normpath(target.lstrip("/") if target.startswith("/") else str(PurePosixPath(path).parent / target))))
     return result
 
 
