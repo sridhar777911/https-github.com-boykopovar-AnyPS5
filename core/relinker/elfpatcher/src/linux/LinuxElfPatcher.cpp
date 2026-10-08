@@ -3,8 +3,10 @@
 #include <elfpatcher/general/ProgramHeaderLayoutRequest.hpp>
 #include <elfpatcher/general/SectionHeaderTableRequest.hpp>
 #include <codegen/x86/Amd64OnlySubstitutionTable.hpp>
+#include <codegen/x86/StubBodyBuilder.hpp>
 #include <algorithm>
 #include <limits>
+#include <span>
 #include <string>
 
 namespace Elfpatcher::Linux {
@@ -47,6 +49,7 @@ void LinuxElfPatcher::_appendTrampoline(
     const auto bodyVaddr = vaddrOfExtraBlockOffset(bodyOff);
     for (const std::uint8_t b : site.Body)
         buf.push_back(b);
+    Codegen::ApplyStubRelocations(std::span<std::uint8_t>(buf.data() + bodyOff, site.ReturnBranchOffset), site.Relocations, site.Address, bodyVaddr, site.Offset);
 
     const auto inRange = [](const std::int64_t displacement) {
         return displacement >= std::numeric_limits<std::int32_t>::min() && displacement <= std::numeric_limits<std::int32_t>::max();
