@@ -27,11 +27,29 @@ void* APS5_VABI __cxa_demangle_nid_postfix(const char* mangled, char* buf, std::
     return abi::__cxa_demangle(mangled, buf, len, status);
 }
 
-int APS5_VABI __cxa_thread_atexit_impl_nid_postfix(void (*func)(void*), void* arg, void* dso) {
-    return __cxxabiv1::__cxa_thread_atexit(func, arg, dso);
+int APS5_VABI __cxa_thread_atexit_impl_nid_postfix(void (APS5_VABI *func)(void*), void* arg, void* dso) {
+    struct ThreadAtexitContext {
+        void (APS5_VABI *destructor)(void*);
+        void* object;
+    };
+    auto* context = new (std::nothrow) ThreadAtexitContext{func, arg};
+    if (context == nullptr)
+        return -1;
+    const int result = __cxxabiv1::__cxa_thread_atexit(
+        [](void* opaque) {
+            auto* context = static_cast<ThreadAtexitContext*>(opaque);
+            const auto destructor = context->destructor;
+            void* object = context->object;
+            delete context;
+            destructor(object);
+        },
+        context, dso);
+    if (result != 0)
+        delete context;
+    return result;
 }
 
-int APS5_VABI LibcInternalExtCxaThreadAtexit_nid_postfix(void (*destructor)(void*), void* object, void* module_id) {
+int APS5_VABI LibcInternalExtCxaThreadAtexit_nid_postfix(void (APS5_VABI *destructor)(void*), void* object, void* module_id) {
 #ifdef _WIN32
     (void)module_id;
     return __cxa_thread_atexit_impl_nid_postfix(destructor, object, nullptr);
