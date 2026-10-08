@@ -26,7 +26,7 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
     for (std::uint32_t i = 0; i < userCount; ++i) {
         userData.push_back(readUserData(queue.shader, 0x240 + i));
     }
-    auto compute = Graphics::DecodeComputeStageInfo(queue.shader);
+    auto compute = Graphics::DecodeComputeStageInfo(queue.shader, snapshot.header);
     std::vector<ShaderRecompiler::MemoryRegion> memory{{snapshot.codeAddress, std::as_bytes(std::span(snapshot.code))}};
     if (!snapshot.header.empty()) memory.push_back({snapshot.headerAddress, snapshot.header});
 
