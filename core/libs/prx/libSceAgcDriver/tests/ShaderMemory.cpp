@@ -1385,6 +1385,73 @@ void verifyBdaReadFallbackFunctions() {
     }
 }
 
+void verifyBdaWriteFallbackFunctions() {
+    using namespace ShaderRecompiler;
+    const std::array<std::uint32_t, 3> capabilities{spv::CapabilityInt64, spv::CapabilityPhysicalStorageBufferAddresses, spv::CapabilityStorageBuffer8BitAccess};
+    const std::array<std::string_view, 2> extensions{"SPV_KHR_physical_storage_buffer", "SPV_KHR_8bit_storage"};
+    alignas(256) static std::array<std::uint32_t, 32> output{};
+    const auto outputAddress = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(output.data()));
+    const std::array<std::uint32_t, 8> userData{0x10000000u, 0u, 0u, 0u, static_cast<std::uint32_t>(outputAddress), static_cast<std::uint32_t>((outputAddress >> 32u) & 0xffffu), 128u, 0x01016facu};
+    const auto compile = [&](std::uint32_t stores, bool coherent) {
+        std::vector<std::uint32_t> code{0x7e020200u, 0x7e040201u};
+        for (std::uint32_t store = 0; store < stores; ++store) {
+            code.push_back(0xdc708000u | (coherent ? 0x10000u : 0u) | (4u * store + 4u));
+            code.push_back(0x00000101u);
+        }
+        code.push_back(0xbf810000u);
+        RecompileRequest request{};
+        request.shader = {ShaderStage::Compute, 0x50000u, code, 0, {}};
+        request.context.waveSize = 32;
+        request.context.userDataBaseRegister = 0;
+        request.context.userData = userData;
+        request.context.compute = ShaderComputeStageInfo{{32u, 1u, 1u}, 0u, {false, false, false}, false, 1u};
+        request.target.vulkanVersion = 0x00401000u;
+        request.target.spirvVersion = 0x00010300u;
+        request.target.subgroupSize = 32;
+        request.target.bdaAbiVersion = BdaAbi::Version;
+        request.target.supportedCapabilities = capabilities;
+        request.target.supportedExtensions = extensions;
+        request.target.fragmentShaderBarycentricEnabled = false;
+        request.layout.pushConstantSizeBytes = 128;
+        request.useCache = false;
+        return Recompile(request).spirv;
+    };
+    for (const bool coherent : {false, true}) {
+        const auto one = compile(1u, coherent);
+        const auto five = compile(5u, coherent);
+        std::map<std::uint32_t, std::string> names;
+        std::map<std::string, std::uint32_t> definitions;
+        const auto writer = std::string("write_bda_bytes") + (coherent ? "_coherent" : "");
+        std::string function;
+        std::size_t mainLookups = 0;
+        std::array<std::size_t, 2> writerStores{};
+        for (std::size_t cursor = 5; cursor < five.size();) {
+            const auto length = five[cursor] >> 16u;
+            require(length != 0 && length <= five.size() - cursor, "BDA write functions: truncated SPIR-V instruction");
+            const auto op = five[cursor] & 0xffffu;
+            if (op == spv::OpName) names[five[cursor + 1]] = reinterpret_cast<const char*>(&five[cursor + 2]);
+            if (op == spv::OpFunction) {
+                function = names[five[cursor + 2]];
+                if (function == "note_bda_write") {
+                    ++definitions[function];
+                }
+                if (function.starts_with("write_bda_bytes")) {
+                    require((five[cursor + 3] & spv::FunctionControlDontInlineMask) != 0u, "BDA write functions: a byte write function may be inlined");
+                    ++definitions[function];
+                }
+            }
+            if (op == spv::OpFunctionCall && function == "main" && names[five[cursor + 3]] == "get_bda_write_pointer") ++mainLookups;
+            if (op == spv::OpStore && function == writer) ++writerStores[length > 3u && (five[cursor + 3] & spv::MemoryAccessVolatileMask) != 0u];
+            cursor += length;
+        }
+        require(definitions["note_bda_write"] == 1u && definitions[writer] == 1u, "BDA write functions: the note and byte write functions are not defined");
+        for (const auto& [name, count] : definitions) require(count == 1u, "BDA write functions: a function is defined twice");
+        require(mainLookups == 0u, "BDA write functions: a write site looks up its bytes inline");
+        require(writerStores[coherent] == 1u && writerStores[!coherent] == 0u, "BDA write functions: the byte stores do not keep the access's coherence");
+        require(five.size() - one.size() < 4u * 300u, "BDA write functions: a write site takes 300 SPIR-V words or more");
+    }
+}
+
 void verifyFunctionLdsBound() {
     using namespace ShaderRecompiler;
     const auto build = [](const auto& body) {
@@ -1547,6 +1614,7 @@ int main() {
         verifyWaveUniformValues();
         verifyTwoLaneUniformValues();
         verifyBdaReadFallbackFunctions();
+        verifyBdaWriteFallbackFunctions();
         verifyFunctionLdsBound();
 #if ANYPS5_ENABLE_SPIRV_TOOLS
         const std::vector<std::uint32_t> minimalSpirv{

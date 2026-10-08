@@ -105,7 +105,9 @@ struct SpirvEmitterState {
     // every read takes the byte path.
     std::uint32_t bdaProbeFunction = 0;
     std::uint32_t bdaWritePointerFunction = 0;
+    std::uint32_t bdaWriteProbeFunction = 0;
     std::uint32_t bdaNoteWriteFunction = 0;
+    std::array<std::uint32_t, 2> bdaByteWriteFunctions {};
     std::uint32_t bdaFaultFunction = 0;
     std::array<std::array<std::uint32_t, 2>, 2> bdaDwordReadFunctions {};
     std::uint32_t bdaStopValue = 0;
