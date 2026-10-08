@@ -162,6 +162,33 @@ void decoderRipRelative() {
         require(!decoder.DecodeInstruction(instruction.data(), instruction.size()).HasRipRelativeDisp, "Vector instruction without a RIP-relative operand was reported as RIP-relative");
 }
 
+void decoderTwoByteOpcodeLengths() {
+    const Codegen::X64InstructionDecoder decoder;
+    const std::vector<Bytes> instructions = {
+        {0x0F, 0xA8}, {0x0F, 0xA9}, {0x0F, 0xAA}, {0x66, 0x0F, 0xA8}, {0x41, 0x0F, 0xA9},
+        {0x0F, 0xAB, 0xC8}, {0x0F, 0xAB, 0x05, 0x10, 0x00, 0x00, 0x00}, {0x48, 0x0F, 0xAB, 0x44, 0x24, 0x08},
+        {0x0F, 0x20, 0xC0}, {0x0F, 0x20, 0x05}, {0x0F, 0x22, 0x04}, {0x0F, 0x21, 0x45}, {0x0F, 0x23, 0x85},
+        {0x66, 0x0F, 0x38, 0x20, 0x05, 0x10, 0x00, 0x00, 0x00}, {0x66, 0x0F, 0x38, 0x23, 0x44, 0x24, 0x08}};
+    Bytes padded;
+    for (const auto& instruction : instructions) {
+        padded = instruction;
+        padded.insert(padded.end(), 8, 0x90);
+        require(decoder.Decode(padded.data(), padded.size()) == instruction.size(), "Two-byte opcode was decoded with operand bytes it does not have");
+        require(decoder.DecodeInstruction(padded.data(), padded.size()).Length == instruction.size(), "Two-byte opcode was described with operand bytes it does not have");
+    }
+    const Bytes controlRegister = {0x0F, 0x20, 0x05, 0x90, 0x90, 0x90, 0x90};
+    const auto control = decoder.DecodeInstruction(controlRegister.data(), controlRegister.size());
+    require(control.Length == 3 && control.HasModRm && control.ModRmByte == 0x05 && !control.HasRipRelativeDisp, "MOV from a control register was reported as RIP-relative");
+    const Bytes debugRegister = {0x0F, 0x23, 0x05, 0x90, 0x90, 0x90, 0x90};
+    require(!decoder.DecodeInstruction(debugRegister.data(), debugRegister.size()).HasRipRelativeDisp, "MOV to a debug register was reported as RIP-relative");
+    const Bytes extend = {0x66, 0x0F, 0x38, 0x20, 0x05, 0x10, 0x00, 0x00, 0x00};
+    const auto extended = decoder.DecodeInstruction(extend.data(), extend.size());
+    require(extended.HasRipRelativeDisp && read<std::int32_t>(extend, extended.RipRelativeDispOffset) == 0x10, "PMOVSXBW lost its RIP-relative operand");
+    const Bytes bitTest = {0x0F, 0xAB, 0x05, 0x10, 0x00, 0x00, 0x00};
+    const auto bts = decoder.DecodeInstruction(bitTest.data(), bitTest.size());
+    require(bts.HasRipRelativeDisp && read<std::int32_t>(bitTest, bts.RipRelativeDispOffset) == 0x10, "BTS lost its RIP-relative operand");
+}
+
 void sse4aOperands() {
     const auto check = [](const Bytes& site, const bool insertq, const int dst, const int src, const int length, const int index) {
         const auto operands = Codegen::DecodeSse4a(site.data(), site.size());
@@ -1113,6 +1140,7 @@ int main() {
     try {
         decoderLengths();
         decoderRipRelative();
+        decoderTwoByteOpcodeLengths();
         sse4aOperands();
         sha256Operands();
         sha1Operands();
