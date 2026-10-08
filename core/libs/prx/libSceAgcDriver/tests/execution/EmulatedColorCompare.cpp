@@ -230,6 +230,7 @@ int main() {
         Require(BindsDepthCompare(Compile(*device, Format32Float, {ClampEdge, FilterBilinear})), "an R32 float texture left the native comparison path");
         Require(!BindsDepthCompare(Compile(*device, Format8888UNorm, {ClampEdge, FilterBilinear})), "a color texture kept a depth-compare binding");
         Run(*device, {ClampEdge, FilterPoint}, "point, clamp to edge");
+        Run(*device, {ClampWrap, FilterPoint}, "point, wrap");
         Run(*device, {ClampEdge, FilterBilinear}, "bilinear, clamp to edge");
         Run(*device, {ClampWrap, FilterBilinear}, "bilinear, wrap");
         Run(*device, {ClampBorder, FilterPoint, BorderWhite}, "point, white border");
