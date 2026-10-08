@@ -30,6 +30,7 @@ public:
         append(key, request.context.compute);
         append(key, request.context.pixel);
         append(key, request.context.vertex);
+        appendFloatModes(key, request);
         appendMesh(key, request);
         append(key, request.target);
         append(key, DebugProbeActive());
@@ -51,6 +52,7 @@ public:
         append(key, request.context.compute);
         append(key, request.context.pixel);
         append(key, request.context.vertex);
+        appendFloatModes(key, request);
         appendMesh(key, request);
         std::uint64_t hash = 0xcbf29ce484222325ull;
         for (const auto value : key) {
@@ -74,6 +76,21 @@ public:
     }
 
 private:
+    static void append(std::vector<std::uint64_t>& key, const ShaderFloatMode& value) {
+        append(key, value.floatMode);
+        append(key, value.dx10Clamp);
+        append(key, value.ieee);
+        append(key, value.fp16Overflow);
+    }
+
+    static void appendFloatModes(std::vector<std::uint64_t>& key, const RecompileRequest& request) {
+        append(key, request.context.floatMode);
+        append(key, request.graphics ? request.graphics->linkedPrograms.size() : 0u);
+        if (request.graphics) {
+            for (const auto& program : request.graphics->linkedPrograms) append(key, program.floatMode);
+        }
+    }
+
     static void appendMesh(std::vector<std::uint64_t>& key, const RecompileRequest& request) {
         if (request.shader.stage != ShaderStage::Mesh) return;
         const auto* mesh = request.graphics && request.graphics->mesh ? &*request.graphics->mesh : nullptr;

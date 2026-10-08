@@ -124,7 +124,7 @@ DrawVerdict Driver::draw(QueueState& queue, std::span<const std::uint32_t> packe
     for (std::size_t i = 0; i < programs.size(); ++i) {
         const auto& program = programs[i];
         memory.insert(memory.end(), program.memory.begin(), program.memory.end());
-        linked.push_back({roles[i], program.binary, program.userDataBase, program.firstUserSgpr, program.userData});
+        linked.push_back({roles[i], program.binary, program.userDataBase, program.firstUserSgpr, program.userData, program.floatMode});
     }
     timing.Mark("prepare");
     phaseTiming.Phase(DrawRowProgramPrepare);

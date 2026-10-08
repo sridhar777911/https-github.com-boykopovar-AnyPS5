@@ -756,12 +756,12 @@ void verifyPixelRequestSerialization() {
     minimal.context.waveSize = 64;
     minimal.context.pixel = ShaderPixelStageInfo{};
     const auto encoded = serializer.Serialize(minimal);
-    require(requestPrefix(encoded, 8u) == "NVNQQQkAAAA=", "new requests did not use serialization version 9");
+    require(requestPrefix(encoded, 8u) == "NVNQQQoAAAA=", "new requests did not use serialization version 10");
     constexpr std::size_t mappingOffset = 8u + 37u + 18u + 162u;
     for (std::size_t bytes = 0; bytes < 8u; ++bytes) {
         expectFailure([&] { static_cast<void>(serializer.Deserialize(requestPrefix(encoded, mappingOffset + bytes))); }, "truncated data", "a truncated version-8 pixel mapping was accepted");
     }
-    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQQoAAAA="}) {
+    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQQsAAAA="}) {
         expectFailure([&] { static_cast<void>(serializer.Deserialize(unsupported)); }, "serialization version", "an unsupported request version was accepted");
     }
 }

@@ -92,6 +92,13 @@ int main(int argc, char** argv) {
         std::cout << "header bytes: " << request.shader.header.size() << "\n";
         std::cout << "userData count: " << request.context.userData.size() << "\n";
         std::cout << "waveSize: " << request.context.waveSize << "\n";
+        if (request.context.floatMode) {
+            const auto& mode = *request.context.floatMode;
+            std::cout << "floatMode: 0x" << std::hex << static_cast<unsigned>(mode.floatMode) << std::dec
+                      << " dx10Clamp: " << mode.dx10Clamp << " ieee: " << mode.ieee << " fp16Overflow: " << mode.fp16Overflow << "\n";
+        } else {
+            std::cout << "floatMode: unknown\n";
+        }
         std::cout << "userDataBaseRegister: " << request.context.userDataBaseRegister << "\n";
         std::cout << "memory regions: " << request.context.memory.size() << "\n";
 

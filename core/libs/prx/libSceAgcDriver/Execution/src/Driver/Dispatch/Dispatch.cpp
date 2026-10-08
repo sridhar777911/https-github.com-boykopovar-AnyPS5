@@ -70,6 +70,7 @@ void Driver::dispatch(QueueState& queue, std::span<const std::uint32_t> packet, 
         {0, 0, 0, 128}
     };
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
+    if (const auto mode = queue.shader.find(0x212u); mode != queue.shader.end()) request.context.floatMode = ShaderRecompiler::ShaderFloatMode::Decode(mode->second);
     static double captureMs = 0, keyMs = 0, recompileMs = 0, deviceMs = 0;
     static std::uint64_t cacheHits = 0;
     static std::uint64_t dispatches = 0;

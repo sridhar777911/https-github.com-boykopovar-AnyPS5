@@ -26,6 +26,7 @@ std::shared_ptr<DrawDecode> Driver::decodeDraw(const QueueState& queue, const Su
         require(snapshot.type == type, "graphics program refers to an incompatible shader binary type");
         Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, rsrc2);
         const auto resources = nullPixel && !queue.shader.contains(rsrc2) ? 0u : readRegister(queue.shader, rsrc2);
+        Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, rsrc2 - 1);
         const auto userCount = ((resources >> 1u) & 0x1fu) | (((resources >> 27u) & 1u) << 5u);
         require(userCount <= 32, "graphics user SGPR count exceeds the register bank");
         const auto codeOffset = static_cast<std::size_t>((address - snapshot.codeAddress) / sizeof(std::uint32_t));
@@ -38,6 +39,7 @@ std::shared_ptr<DrawDecode> Driver::decodeDraw(const QueueState& queue, const Su
             it->second,
             codeOffset
         };
+        if (const auto mode = queue.shader.find(rsrc2 - 1); mode != queue.shader.end()) result.floatMode = ShaderRecompiler::ShaderFloatMode::Decode(mode->second);
         for (std::uint32_t i = 0; i < userCount; ++i) {
             Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, userDataBase + i);
             result.userData.push_back(readUserData(queue.shader, userDataBase + i));

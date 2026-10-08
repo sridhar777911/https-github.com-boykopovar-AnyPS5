@@ -38,6 +38,13 @@ void Driver::lookupDraw(const Submission& submission, const std::shared_ptr<Vulk
                 mix(static_cast<std::uint64_t>(program.binary.stage));
                 mix(program.userDataBase);
                 mix(program.firstUserSgpr);
+                mix(program.floatMode.has_value());
+                if (program.floatMode) {
+                    mix(program.floatMode->floatMode);
+                    mix(program.floatMode->dx10Clamp);
+                    mix(program.floatMode->ieee);
+                    mix(program.floatMode->fp16Overflow);
+                }
                 mix(program.userData.size());
                 for (const auto word : program.userData) mix(word);
                 mix(vertexInfos[i].has_value());
