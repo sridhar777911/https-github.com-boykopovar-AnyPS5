@@ -1,4 +1,5 @@
 #include "CacheKey.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/DrawRegisterKey.hpp"
 #include "ControlFlow/RequestSerializer.hpp"
 #include <array>
 #include <iostream>
@@ -17,6 +18,34 @@ void require(bool condition, const char* message) {
 int main() {
     try {
         using namespace ShaderRecompiler;
+        for (const auto offset : {0x00au, 0x08au, 0x10au}) {
+            AgcDriver::QueueState queue;
+            const auto absent = AgcDriver::Graphics::DrawRegisterKey(queue, 1);
+            queue.shader[offset] = 0;
+            const auto zero = AgcDriver::Graphics::DrawRegisterKey(queue, 1);
+            require(absent != zero, "the draw key aliases unknown RSRC1 and explicit zero");
+            for (const auto bit : {12u, 13u, 14u, 15u, 16u, 17u, 18u, 19u, 21u, 23u, 26u}) {
+                queue.shader[offset] = 1u << bit;
+                require(AgcDriver::Graphics::DrawRegisterKey(queue, 1) != zero, "the production draw key ignores a graphics float-mode bit");
+            }
+            const auto key = AgcDriver::Graphics::DrawRegisterKey(queue, 1);
+            queue.shader[0x300] = 0xffffffffu;
+            require(AgcDriver::Graphics::DrawRegisterKey(queue, 1) == key, "an unrelated shader register changed the draw key");
+            require(AgcDriver::Graphics::DrawRegisterKey(queue, 2) != key, "the draw key ignored the device serial");
+        }
+        {
+            AgcDriver::QueueState queue;
+            queue.shader[0x10b] = 2;
+            queue.shader[0x10c] = 0x11;
+            queue.shader[0x10d] = 0x22;
+            const auto used = AgcDriver::Graphics::DrawRegisterKey(queue, 1);
+            const auto all = AgcDriver::Graphics::DrawRegisterKey(queue, 1, true);
+            queue.shader[0x10d] = 0x33;
+            require(AgcDriver::Graphics::DrawRegisterKey(queue, 1) == used, "an unread hull user word changed the optimized draw key");
+            require(AgcDriver::Graphics::DrawRegisterKey(queue, 1, true) != all, "the all-user-words diagnostic key ignored an unread word");
+            queue.shader[0x10c] = 0x44;
+            require(AgcDriver::Graphics::DrawRegisterKey(queue, 1) != used, "a read hull user word was omitted from the draw key");
+        }
         const RequestSerializer serializer;
         RecompileRequest request{};
         request.context.waveSize = 32;
