@@ -513,7 +513,7 @@ State DecodeState(const QueueState& queue) {
     const auto shaderMask = read(cx, 0x8f);
     // Channels of targets the pixel shader does not export are never written, so the target mask only
     // matters where the shader exports.
-    const auto targetMask = read(cx, 0x8e) & shaderMask;
+    const auto targetMask = ColorWriteMask(cx);
     APS5_LOG_OUT_DEBUG("CB_TARGET_MASK=0x%x CB_SHADER_MASK=0x%x", targetMask, shaderMask);
     std::vector<std::uint32_t> exportSlots;
     for (std::uint32_t slot = 0; slot < 8; ++slot) {
@@ -636,6 +636,17 @@ std::size_t CmaskBytes(std::uint32_t width, std::uint32_t height) {
     constexpr std::size_t metablockHeight = 512;
     constexpr std::size_t metablockBytes = 4096;
     return ((width + metablockWidth - 1) / metablockWidth) * ((height + metablockHeight - 1) / metablockHeight) * metablockBytes;
+}
+
+std::uint32_t ColorWriteMask(const Registers& context) {
+    auto mask = read(context, 0x8e) & read(context, 0x8f);
+    for (std::uint32_t slot = 0; slot < 8; ++slot) {
+        const auto channels = 0xfu << (slot * 4u);
+        if ((mask & channels) == 0) continue;
+        const auto info = find(context, 0x31c + slot * 0xfu);
+        if (info != context.end() && ((info->second >> 2u) & 0x1fu) == 0) mask &= ~channels;
+    }
+    return mask;
 }
 
 ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
@@ -804,7 +815,7 @@ std::string DrawRejection(const QueueState& queue, bool indexed) {
     if (value(cx, 0x206, word) && word != 0x43fu) return vteMessage(word);
     if (auto reason = nonzero(cx, 0x204, ClipControlMask, "unsupported PA_CL_CLIP_CNTL flags"); !reason.empty()) return reason;
     std::uint32_t targetMask = 0, shaderMask = 0;
-    if (value(cx, 0x8e, targetMask) && value(cx, 0x8f, shaderMask) && value(cx, 0x202, word) && !colorControlSupported(word, (targetMask & shaderMask) != 0)) return colorControlMessage(word);
+    if (value(cx, 0x8e, targetMask) && value(cx, 0x8f, shaderMask) && value(cx, 0x202, word) && !colorControlSupported(word, ColorWriteMask(cx) != 0)) return colorControlMessage(word);
     if (auto reason = nonzero(cx, 0x1c4, zFormatSupported(zFormat) ? 0u : ~0u, "depth or sample-mask export"); !reason.empty()) return reason;
     if (PixelProgramUnset(queue)) return NullPixelProgramRejection(queue);
     for (const auto offset : {0x1b3u, 0x1b4u, 0x1c5u}) {
@@ -826,7 +837,7 @@ std::string NullPixelProgramRejection(const QueueState& queue) {
     const auto targetMask = find(queue.context, 0x8e);
     const auto shaderMask = find(queue.context, 0x8f);
     if (targetMask == queue.context.end() || shaderMask == queue.context.end()) return "AGC graphics: a draw without a pixel program needs CB_TARGET_MASK and CB_SHADER_MASK";
-    if ((targetMask->second & shaderMask->second) != 0) return "AGC graphics: a draw without a pixel program writes color";
+    if (ColorWriteMask(queue.context) != 0) return "AGC graphics: a draw without a pixel program writes color";
     return {};
 }
 
