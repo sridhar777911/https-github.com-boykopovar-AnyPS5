@@ -113,6 +113,7 @@ void testClearState() {
     graphics.ClearContext();
     check(graphics.context == AgcDriver::InitialContextRegisters(), "CLEAR_STATE retained context registers");
     check(graphics.shader == shader && graphics.userConfig == userConfig, "CLEAR_STATE reset unrelated registers");
+    check(graphics.context.count(0x1b3) == 1 && graphics.context.at(0x1b3) == 0 && graphics.context.count(0x1b4) == 1 && graphics.context.at(0x1b4) == 0, "CLEAR_STATE left SPI_PS_INPUT_ENA/ADDR unset");
     graphics.context.emplace(0x10, 31);
     graphics.ClearContext();
     check(graphics.context == AgcDriver::InitialContextRegisters(), "repeated CLEAR_STATE retained context registers");
