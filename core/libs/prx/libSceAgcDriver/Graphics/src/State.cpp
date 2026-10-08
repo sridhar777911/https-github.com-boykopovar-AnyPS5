@@ -66,7 +66,7 @@ constexpr std::uint32_t DepthControlMask = ~0x007007f0u;
 // to run, which it always does here.
 constexpr std::uint32_t ShaderControlMask = ~(0x0000f870u | 0x00020600u);
 constexpr std::uint32_t AlphaToCoverageMask = ~0x0001ff00u;
-constexpr std::uint32_t ScanModeMask = ~2u;
+constexpr std::uint32_t ScanModeMask = ~0x22u;
 constexpr std::uint32_t ScanControlMask = ~0x06023fffu;
 constexpr std::uint32_t ScreenOffsetMask = ~0x01ff01ffu;
 // Bits 26/27 (ZCLIP_NEAR/FAR_DISABLE) become depth clamping; bit 19 selects the [0, 1] clip space.
@@ -234,6 +234,7 @@ std::uint32_t effectiveDepthControl(std::uint32_t depthControl) {
 }
 
 bool colorControlSupported(std::uint32_t colorControl, bool hasColorTarget) {
+    colorControl &= ~1u;
     return colorControl == 0xcc0010u || (!hasColorTarget && (colorControl & ~0x70u) == 0xcc0000u);
 }
 
@@ -396,7 +397,7 @@ ShaderStages DecodeShaderStages(const QueueState& queue) {
     APS5_LOG_OUT_DEBUG("DecodeShaderStages value=0x%x primitive=%u path=%u vertexWave=%u", value, primitive, static_cast<unsigned>(result.path), result.vertexWaveSize);
     if (path == ShaderPath::Vertex) {
         validate((value & 0x2000u) != 0, "legacy vertex routing without PRIMGEN_EN is unsupported");
-        validate((value & ~0x02402010u) == 0, "unsupported vertex routing, scheduling or wave-ID state");
+        validate((value & ~0x0247a010u) == 0, "unsupported vertex routing, scheduling or wave-ID state");
     } else if (path == ShaderPath::Tessellation) {
         validate((value & 0x00600020u) == 0, "wave32 tessellation or geometry amplification is unsupported");
         validate((value & ~0x0007ed0du) == 0 && (value & 3u) == 1u && ((value >> 3u) & 3u) == 1u, "unsupported tessellation routing");
