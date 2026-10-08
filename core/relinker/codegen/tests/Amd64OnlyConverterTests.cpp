@@ -160,6 +160,9 @@ void decoderRipRelative() {
     }
     for (const auto& instruction : kRegisterVectorOperations)
         require(!decoder.DecodeInstruction(instruction.data(), instruction.size()).HasRipRelativeDisp, "Vector instruction without a RIP-relative operand was reported as RIP-relative");
+    const Bytes ud1 = {0x0F, 0xB9, 0x05, 0x10, 0x00, 0x00, 0x00};
+    const auto trap = decoder.DecodeInstruction(ud1.data(), ud1.size());
+    require(trap.Length == ud1.size() && trap.FlowKind == Codegen::ControlFlowKind::Trap && trap.HasRipRelativeDisp && read<std::int32_t>(ud1, trap.RipRelativeDispOffset) == 0x10, "UD1 was not decoded as a trap with its RIP-relative operand");
 }
 
 void sse4aOperands() {
