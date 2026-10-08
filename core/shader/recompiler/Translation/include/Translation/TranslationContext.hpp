@@ -38,6 +38,7 @@ private:
     RdnaOperand scalarDestinationOperand(const RdnaOperand& operand, std::uint32_t offset);
     RdnaOperand plainOperand(const RdnaOperand& operand);
     std::array<IrU32, 2> ballotMask(IrU1 value);
+    IrU32 hostExecWord(std::uint32_t half);
     IrU32 readRawU32(const RdnaOperand& operand);
     IrU32 readScalarCode(std::uint32_t code);
     IrU32 applyBitSourceModifiers(const RdnaOperand& operand, IrU32 value);
