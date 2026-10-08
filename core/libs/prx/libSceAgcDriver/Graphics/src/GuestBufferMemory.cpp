@@ -324,9 +324,19 @@ void decideImportWatch(const Context& context, HostImports& state) {
 #endif
 }
 
+std::shared_ptr<const GuestAllocations::Range> leasedRangeOwner(const GuestAllocations::Lease& lease, std::uint64_t base) {
+    const auto found = std::lower_bound(lease.begin(), lease.end(), base, [](const auto& range, std::uint64_t value) { return range->address < value; });
+    return found != lease.end() && (*found)->address == base ? *found : nullptr;
+}
+
+bool sameRange(const HostImport& entry, const GuestAllocations::Lease& lease) {
+    const auto current = leasedRangeOwner(lease, entry.base);
+    return current != nullptr && !entry.range.owner_before(current) && !current.owner_before(entry.range);
+}
+
 const HostImport* importAllocation(const Context& context, HostImports& state, std::uint64_t base, std::uint64_t bytes, const GuestAllocations::Lease& lease) {
     if (const auto found = state.imports.find(base); found != state.imports.end()) {
-        if (found->second.bytes == bytes) return &found->second;
+        if (found->second.bytes == bytes && sameRange(found->second, lease)) return &found->second;
         retireImport(context, state, found, lease);
     }
     const auto alignment = context.hostImportAlignment;
@@ -353,6 +363,7 @@ const HostImport* importAllocation(const Context& context, HostImports& state, s
         return nullptr;
     }
     HostImport entry{base, bytes, VK_NULL_HANDLE, VK_NULL_HANDLE, 0};
+    entry.range = leasedRangeOwner(lease, base);
 #ifdef _WIN32
     // Drivers pin imported pages, so every page must be committed and accessible.
     bool writable = true;
@@ -473,11 +484,13 @@ void refreshImports(const Context& context, HostImports& state, const GuestAlloc
     state.refreshedGeneration = generation;
     for (auto it = state.imports.begin(); it != state.imports.end();) {
         const auto* range = leasedRangeAt(lease, it->first);
-        if (range != nullptr && range->bytes == it->second.bytes) {
+        if (range != nullptr && range->bytes == it->second.bytes && sameRange(it->second, lease)) {
             if (it->second.unwatched) GuestMemory::Unwatch(it->first, it->second.bytes);
             ++it;
             continue;
         }
+        static const bool trace = std::getenv("APS5_TRACE_HOST_IMPORT") != nullptr;
+        if (trace && range != nullptr && range->bytes == it->second.bytes) std::fprintf(stderr, "[gpu] host import of 0x%llx+0x%llx retired: the range was mapped again\n", static_cast<unsigned long long>(it->first), static_cast<unsigned long long>(it->second.bytes));
         const auto next = std::next(it);
         retireImport(context, state, it, lease);
         it = next;

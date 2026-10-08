@@ -500,6 +500,10 @@ int APS5_VABI _ZN3sce4Json11Initializer27setGlobalNullAccessCallBackEPFRKNS0_5Va
     return 0;
 }
 
+int APS5_VABI _ZN3sce4Json11Initializer27setGlobalNullAccessCallbackEPFRKNS0_5ValueENS0_9ValueTypeEPS3_PvES7_(void* self, NullAccessCallback callback, void* context) {
+    return _ZN3sce4Json11Initializer27setGlobalNullAccessCallBackEPFRKNS0_5ValueENS0_9ValueTypeEPS3_PvES7_(self, callback, context);
+}
+
 void APS5_VABI _ZN3sce4Json12MemAllocatorC2Ev(void* self) {
     *static_cast<void* const**>(self) = &JsonMemAllocatorVtable[2];
 }

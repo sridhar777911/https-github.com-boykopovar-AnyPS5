@@ -16,7 +16,7 @@
 
 ## Build and test
 
-Toolchains are listed in the [README](README.md#build).
+Toolchains are listed in the [build instructions](docs/dev/BUILD.md).
 
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON

@@ -73,6 +73,7 @@ static std::mutex hostLock;
 
 static constexpr int HostRounds = 20;
 static std::atomic<int> hostRound{0};
+static std::atomic<int> hostAcquired{0};
 
 static void* APS5_VABI HostBlocked(void* arg) {
     auto& worker = *static_cast<Worker*>(arg);
@@ -81,6 +82,7 @@ static void* APS5_VABI HostBlocked(void* arg) {
         while (hostRound.load() != round) std::this_thread::yield();
         worker.started.store(true);
         std::lock_guard lock(hostLock);
+        hostAcquired.store(round + 1);
     }
     return nullptr;
 }
@@ -164,6 +166,7 @@ int main() {
         Require(sceKernelRaiseException(blockedThread, SIGUSR1) == 0);
         hostLock.unlock();
         ExpectDelivery(1 + 2 * Repeats + round, blocked.id);
+        while (hostAcquired.load() != round + 1) std::this_thread::yield();
         hostLock.lock();
         blocked.started.store(false);
         hostRound.store(round + 1);

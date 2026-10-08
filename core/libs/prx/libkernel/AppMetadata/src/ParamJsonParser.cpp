@@ -181,7 +181,12 @@ JsonValue parseJsonNumber(const std::string& text, std::size_t& position) {
     const std::size_t start = position;
     if (peekChar(text, position) == '-') ++position;
     if (position >= text.size() || text[position] < '0' || text[position] > '9') throw std::runtime_error("malformed number in param.json");
-    while (position < text.size() && text[position] >= '0' && text[position] <= '9') ++position;
+    if (text[position] == '0') {
+        ++position;
+        if (position < text.size() && text[position] >= '0' && text[position] <= '9') throw std::runtime_error("malformed number in param.json");
+    } else {
+        while (position < text.size() && text[position] >= '0' && text[position] <= '9') ++position;
+    }
     if (position < text.size() && text[position] == '.') {
         ++position;
         if (position >= text.size() || text[position] < '0' || text[position] > '9') throw std::runtime_error("malformed number in param.json");
