@@ -29,6 +29,7 @@ constexpr std::int32_t Height = 7;
 constexpr std::uint32_t StorageLevels = 4;
 constexpr std::uint32_t Format8888UNorm = 56;
 constexpr std::uint32_t Type2D = 9;
+constexpr std::uint32_t Type3D = 10;
 constexpr std::uint8_t OtherLevelTexel = 0x40u;
 alignas(256) std::array<std::uint32_t, Threads * Words> Buffer{};
 alignas(256) std::array<std::uint8_t, 16384> SingleLevel{};
@@ -231,6 +232,17 @@ int main() {
         ExpectFailure(*device, TextureDescriptor(MultiLevel.data(), 2u, 2u), Samplers[0].words, "single-level", "a 3-level view");
         ExpectFailure(*device, single, {0x00008092u, 0x00fff000u, 0x05100000u, 0u}, "different minification", "unequal minification and magnification filters");
         ExpectFailure(*device, single, {0x00008090u, 0x00fff000u, 0x05500000u, 0u}, "clamp mode 0", "wrap on X");
+        auto constant = TextureDescriptor(SingleLevel.data(), 0u, 0u);
+        constant[3] = 0x041u | (Type3D << 28u);
+        for (const auto& sampler : Samplers) {
+            const auto samples = Run(*device, constant, sampler.words, coordinates);
+            for (const auto& sample : samples) {
+                for (std::uint32_t index = 0; index < Results; ++index) {
+                    const std::uint32_t expected = (index % 4u == 0u || index % 4u == 2u) ? 0x3f800000u : 0u;
+                    Require(sample[index] == expected, std::string(sampler.name) + ": a 3D view whose channels select constants returned 0x" + std::to_string(sample[index]) + " for result " + std::to_string(index));
+                }
+            }
+        }
         std::puts("image sample unnormalized tests passed");
         return 0;
     } catch (const std::exception& error) {

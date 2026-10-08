@@ -79,6 +79,7 @@ struct ImageResource {
     bool packed = false;
     IrBufferFormat packedFormat = IrBufferFormat::Invalid;
     std::uint32_t emulatedCompare = 0;
+    std::uint32_t constantSwizzle = 0;
     std::uint32_t indirectRoot = NoIndirectImage;
     std::uint32_t indirectMappingOffset = 0;
     std::uint32_t indirectSearchIterations = 0;
