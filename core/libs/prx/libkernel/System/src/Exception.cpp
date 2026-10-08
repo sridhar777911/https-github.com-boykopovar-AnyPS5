@@ -4,13 +4,23 @@
 #include "prx/libc/include/General.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
 #include "prx/libkernel/Pthread/include/Pthread.hpp"
+#include "prx/libkernel/System/include/GuestSignalMask.hpp"
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <cstdlib>
+#include <system_error>
+#include <pthread.h>
+#include <ucontext.h>
+#include <unistd.h>
 #endif
 
 extern "C" Pthread APS5_VABI scePthreadSelf();
@@ -63,7 +73,7 @@ struct GuestMcontext {
     std::uint64_t spare[6];
 };
 
-struct GuestUcontext {
+struct alignas(16) GuestUcontext {
     std::uint32_t sigmask[4];
     std::int32_t reserved[12];
     GuestMcontext mcontext;
@@ -84,8 +94,8 @@ using GuestExceptionHandler = void (APS5_VABI *)(int, void*);
 
 constexpr std::array<int, 6> AllowedSignals{1, 4, 8, 10, 11, 30};
 
-std::mutex handlersLock;
-std::array<void*, 32> handlers{};
+std::array<std::atomic<void*>, 32> handlers{};
+static_assert(std::atomic<void*>::is_always_lock_free);
 
 bool Allowed(int signum) {
     for (const int allowed : AllowedSignals)
@@ -94,8 +104,39 @@ bool Allowed(int signum) {
 }
 
 GuestExceptionHandler Handler(int signum) {
-    std::lock_guard lock(handlersLock);
-    return reinterpret_cast<GuestExceptionHandler>(handlers[signum]);
+    return reinterpret_cast<GuestExceptionHandler>(handlers[signum].load(std::memory_order_acquire));
+}
+
+constexpr std::size_t MxcsrOffset = 24;
+constexpr std::size_t MxcsrMaskOffset = 28;
+constexpr std::uint32_t DefaultMxcsrMask = 0xffbf;
+
+std::uint32_t FpWord(const GuestMcontext& m, std::size_t offset) {
+    std::uint32_t value = 0;
+    std::memcpy(&value, reinterpret_cast<const unsigned char*>(m.fpstate) + offset, sizeof(value));
+    return value;
+}
+
+void SetFpWord(GuestMcontext& m, std::size_t offset, std::uint32_t value) {
+    std::memcpy(reinterpret_cast<unsigned char*>(m.fpstate) + offset, &value, sizeof(value));
+}
+
+GuestSignalMask::Mask ContextMask(const GuestUcontext& ucontext) {
+    GuestSignalMask::Mask mask{};
+    std::memcpy(mask.data(), ucontext.sigmask, sizeof(ucontext.sigmask));
+    return mask;
+}
+
+void SetContextMask(GuestUcontext& ucontext, const GuestSignalMask::Mask& mask) {
+    std::memcpy(ucontext.sigmask, mask.data(), sizeof(ucontext.sigmask));
+}
+
+void CallHandler(GuestExceptionHandler handler, int signum, GuestUcontext& ucontext) {
+    auto& m = ucontext.mcontext;
+    const std::uint32_t mxcsrMask = FpWord(m, MxcsrMaskOffset);
+    handler(signum, &ucontext);
+    SetFpWord(m, MxcsrOffset, FpWord(m, MxcsrOffset) & (mxcsrMask != 0 ? mxcsrMask : DefaultMxcsrMask));
+    SetFpWord(m, MxcsrMaskOffset, mxcsrMask);
 }
 
 #ifdef _WIN32
@@ -106,9 +147,21 @@ struct Delivery {
     GuestExceptionHandler handler;
     int signum;
     CONTEXT context;
+    PthreadPrivate* thread;
+    GuestSignalMask::Mask interrupted;
 };
 
-void Deliver(GuestExceptionHandler handler, int signum, CONTEXT& context) {
+bool Claim(PthreadPrivate& thread, int signum, GuestSignalMask::Mask& interrupted) {
+    const std::uint32_t bit = GuestSignalBit(signum);
+    interrupted = GuestSignalMask::Stored(thread);
+    interrupted[0] = thread.signalMask[0].fetch_or(bit);
+    if ((interrupted[0] & bit) == 0) return true;
+    thread.pendingSignals.fetch_or(bit);
+    return false;
+}
+
+void RunHandler(const Delivery& delivery, GuestExceptionHandler handler, const GuestSignalMask::Mask& interrupted, CONTEXT& context) {
+    const int signum = delivery.signum;
     GuestUcontext ucontext{};
     auto& m = ucontext.mcontext;
     m.rdi = context.Rdi;
@@ -134,7 +187,9 @@ void Deliver(GuestExceptionHandler handler, int signum, CONTEXT& context) {
     m.len = sizeof(GuestMcontext);
     static_assert(sizeof(context.FltSave) <= sizeof(m.fpstate));
     std::memcpy(m.fpstate, &context.FltSave, sizeof(context.FltSave));
-    handler(signum, &ucontext);
+    SetContextMask(ucontext, interrupted);
+    CallHandler(handler, signum, ucontext);
+    GuestSignalMask::Store(*delivery.thread, ContextMask(ucontext));
     context.Rdi = m.rdi;
     context.Rsi = m.rsi;
     context.Rdx = m.rdx;
@@ -154,11 +209,28 @@ void Deliver(GuestExceptionHandler handler, int signum, CONTEXT& context) {
     context.Rsp = m.rsp;
     context.EFlags = static_cast<DWORD>(m.rflags);
     std::memcpy(&context.FltSave, m.fpstate, sizeof(context.FltSave));
+    context.MxCsr = context.FltSave.MxCsr;
 }
 
-[[noreturn]] void RedirectedEntry(Delivery* delivery) {
-    CONTEXT context = delivery->context;
-    Deliver(delivery->handler, delivery->signum, context);
+void Deliver(const Delivery& delivery, CONTEXT& context) {
+    auto& thread = *delivery.thread;
+    const std::uint32_t bit = GuestSignalBit(delivery.signum);
+    auto handler = delivery.handler;
+    auto interrupted = delivery.interrupted;
+    for (;;) {
+        RunHandler(delivery, handler, interrupted, context);
+        if (GuestSignalBlocked(thread, delivery.signum) || (thread.pendingSignals.fetch_and(~bit) & bit) == 0) break;
+        handler = Handler(delivery.signum);
+        if (handler == nullptr) throw std::runtime_error("sceKernelRaiseException: no handler installed for the signal");
+        if (!Claim(thread, delivery.signum, interrupted)) break;
+    }
+    GuestSignalMask::DeliverUnblocked(thread);
+}
+
+[[noreturn]] void RedirectedEntry(Delivery* redirected) {
+    const Delivery delivery = *redirected;
+    CONTEXT context = delivery.context;
+    Deliver(delivery, context);
     RtlRestoreContext(&context, nullptr);
     std::abort();
 }
@@ -174,13 +246,11 @@ bool StackWritable(DWORD64 low, DWORD64 high) {
 }
 
 void CALLBACK WaitingEntry(ULONG_PTR parameter) {
-    auto* delivery = reinterpret_cast<Delivery*>(parameter);
-    const auto handler = delivery->handler;
-    const int signum = delivery->signum;
-    delete delivery;
+    const std::unique_ptr<Delivery> delivery(reinterpret_cast<Delivery*>(parameter));
+    if (!Claim(*delivery->thread, delivery->signum, delivery->interrupted)) return;
     CONTEXT context{};
     RtlCaptureContext(&context);
-    Deliver(handler, signum, context);
+    Deliver(*delivery, context);
 }
 
 static_assert(HomeArea + 8 == 40, "Aps5RedirectedEntryStub finds the delivery 40 bytes above its stack pointer");
@@ -192,13 +262,15 @@ bool Exited(HANDLE native) {
 
 bool RaiseOn(Pthread thread, GuestExceptionHandler handler, int signum) {
     if (thread == scePthreadSelf()) {
+        Delivery delivery{handler, signum, {}, thread, {}};
+        if (!Claim(*thread, signum, delivery.interrupted)) return true;
         CONTEXT context{};
         RtlCaptureContext(&context);
-        Deliver(handler, signum, context);
+        Deliver(delivery, context);
         return true;
     }
     const auto native = static_cast<HANDLE>(thread->nativeHandle);
-    auto queued = std::make_unique<Delivery>(Delivery{handler, signum, {}});
+    auto queued = std::make_unique<Delivery>(Delivery{handler, signum, {}, thread, {}});
     if (SuspendThread(native) == static_cast<DWORD>(-1)) {
         if (Exited(native)) return false;
         throw std::runtime_error("sceKernelRaiseException: cannot suspend the target thread");
@@ -207,34 +279,170 @@ bool RaiseOn(Pthread thread, GuestExceptionHandler handler, int signum) {
         ResumeThread(native);
         return false;
     }
+    CONTEXT stopped{};
+    stopped.ContextFlags = CONTEXT_CONTROL;
+    if (!GetThreadContext(native, &stopped)) {
+        ResumeThread(native);
+        throw std::runtime_error("sceKernelRaiseException: cannot read the target thread context");
+    }
     if (thread->waitCount.load(std::memory_order_seq_cst) > 0) {
+        if (GuestSignalBlocked(*thread, signum)) {
+            thread->pendingSignals.fetch_or(GuestSignalBit(signum));
+            ResumeThread(native);
+            return true;
+        }
         const bool accepted = QueueUserAPC(WaitingEntry, native, reinterpret_cast<ULONG_PTR>(queued.get())) != 0;
         ResumeThread(native);
         if (!accepted) throw std::runtime_error("sceKernelRaiseException: cannot queue delivery to the waiting thread");
         queued.release();
         return true;
     }
-    alignas(16) Delivery delivery{handler, signum, {}};
+    if (!Claim(*thread, signum, queued->interrupted)) {
+        ResumeThread(native);
+        return true;
+    }
+    const auto fail = [&](const char* message) {
+        thread->signalMask[0].fetch_and(~GuestSignalBit(signum));
+        ResumeThread(native);
+        throw std::runtime_error(message);
+    };
+    alignas(16) Delivery delivery = *queued;
     delivery.context.ContextFlags = CONTEXT_FULL | CONTEXT_FLOATING_POINT;
-    if (!GetThreadContext(native, &delivery.context)) {
-        ResumeThread(native);
-        throw std::runtime_error("sceKernelRaiseException: cannot read the target thread context");
-    }
+    if (!GetThreadContext(native, &delivery.context))
+        fail("sceKernelRaiseException: cannot read the target thread context");
     const DWORD64 slot = (delivery.context.Rsp - RedZone - sizeof(Delivery)) & ~static_cast<DWORD64>(15);
-    if (!StackWritable(slot - HomeArea - 8, delivery.context.Rsp - RedZone)) {
-        ResumeThread(native);
-        throw std::runtime_error("sceKernelRaiseException: the target thread stack below its red zone is not committed");
-    }
+    if (!StackWritable(slot - HomeArea - 8, delivery.context.Rsp - RedZone))
+        fail("sceKernelRaiseException: the target thread stack below its red zone is not committed");
     std::memcpy(reinterpret_cast<void*>(slot), &delivery, sizeof(Delivery));
     CONTEXT redirected = delivery.context;
     redirected.Rsp = slot - HomeArea - 8;
     redirected.Rip = reinterpret_cast<DWORD64>(&Aps5RedirectedEntryStub);
-    if (!SetThreadContext(native, &redirected)) {
-        ResumeThread(native);
-        throw std::runtime_error("sceKernelRaiseException: cannot redirect the target thread");
-    }
+    if (!SetThreadContext(native, &redirected))
+        fail("sceKernelRaiseException: cannot redirect the target thread");
     ResumeThread(native);
     return true;
+}
+#else
+constexpr std::size_t FxsaveRegisterBytes = 416;
+
+void FromHost(const mcontext_t& host, GuestMcontext& m) {
+    const auto* g = host.gregs;
+    m.rdi = g[REG_RDI];
+    m.rsi = g[REG_RSI];
+    m.rdx = g[REG_RDX];
+    m.rcx = g[REG_RCX];
+    m.r8 = g[REG_R8];
+    m.r9 = g[REG_R9];
+    m.rax = g[REG_RAX];
+    m.rbx = g[REG_RBX];
+    m.rbp = g[REG_RBP];
+    m.r10 = g[REG_R10];
+    m.r11 = g[REG_R11];
+    m.r12 = g[REG_R12];
+    m.r13 = g[REG_R13];
+    m.r14 = g[REG_R14];
+    m.r15 = g[REG_R15];
+    m.rip = g[REG_RIP];
+    m.rsp = g[REG_RSP];
+    m.rflags = g[REG_EFL];
+    m.cs = static_cast<std::uint64_t>(g[REG_CSGSFS]) & 0xffffu;
+    m.ss = static_cast<std::uint64_t>(g[REG_CSGSFS]) >> 48;
+    m.len = sizeof(GuestMcontext);
+    static_assert(sizeof(*host.fpregs) <= sizeof(m.fpstate) && FxsaveRegisterBytes <= sizeof(*host.fpregs));
+    if (host.fpregs != nullptr) std::memcpy(m.fpstate, host.fpregs, sizeof(*host.fpregs));
+}
+
+void ToHost(const GuestMcontext& m, mcontext_t& host) {
+    auto* g = host.gregs;
+    g[REG_RDI] = static_cast<greg_t>(m.rdi);
+    g[REG_RSI] = static_cast<greg_t>(m.rsi);
+    g[REG_RDX] = static_cast<greg_t>(m.rdx);
+    g[REG_RCX] = static_cast<greg_t>(m.rcx);
+    g[REG_R8] = static_cast<greg_t>(m.r8);
+    g[REG_R9] = static_cast<greg_t>(m.r9);
+    g[REG_RAX] = static_cast<greg_t>(m.rax);
+    g[REG_RBX] = static_cast<greg_t>(m.rbx);
+    g[REG_RBP] = static_cast<greg_t>(m.rbp);
+    g[REG_R10] = static_cast<greg_t>(m.r10);
+    g[REG_R11] = static_cast<greg_t>(m.r11);
+    g[REG_R12] = static_cast<greg_t>(m.r12);
+    g[REG_R13] = static_cast<greg_t>(m.r13);
+    g[REG_R14] = static_cast<greg_t>(m.r14);
+    g[REG_R15] = static_cast<greg_t>(m.r15);
+    g[REG_RIP] = static_cast<greg_t>(m.rip);
+    g[REG_RSP] = static_cast<greg_t>(m.rsp);
+    g[REG_EFL] = static_cast<greg_t>(m.rflags);
+    if (host.fpregs != nullptr) std::memcpy(host.fpregs, m.fpstate, FxsaveRegisterBytes);
+}
+
+void Deliver(int, siginfo_t*, void* context) {
+    const auto handler = Handler(GUEST_RAISED_SIGNAL);
+    if (handler == nullptr) {
+        static constexpr char message[] = "sceKernelRaiseException: the handler was removed before the signal was delivered\n";
+        const auto written = write(STDERR_FILENO, message, sizeof(message) - 1);
+        (void)written;
+        std::abort();
+    }
+    auto& hostContext = *static_cast<ucontext_t*>(context);
+    auto* self = CurrentGuestThread();
+    GuestUcontext ucontext{};
+    FromHost(hostContext.uc_mcontext, ucontext.mcontext);
+    if (self != nullptr) {
+        auto interrupted = GuestSignalMask::Stored(*self);
+        GuestSignalMask::ReadHost(hostContext.uc_sigmask, interrupted);
+        SetContextMask(ucontext, interrupted);
+    }
+    CallHandler(handler, GUEST_RAISED_SIGNAL, ucontext);
+    ToHost(ucontext.mcontext, hostContext.uc_mcontext);
+    if (self != nullptr) {
+        GuestSignalMask::Store(*self, ContextMask(ucontext));
+        GuestSignalMask::WriteHost(GuestSignalMask::Stored(*self), hostContext.uc_sigmask);
+    }
+}
+
+void InstallDelivery() {
+    static const bool installed = [] {
+        struct sigaction action{};
+        action.sa_sigaction = Deliver;
+        action.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigemptyset(&action.sa_mask);
+        if (sigaction(HOST_RAISED_SIGNAL, &action, nullptr) != 0)
+            throw std::system_error(errno, std::generic_category(), "sceKernelRaiseException: cannot install the host signal handler");
+        return true;
+    }();
+    (void)installed;
+}
+
+bool Send(Pthread thread) {
+    const int result = pthread_kill(thread->hostThread, HOST_RAISED_SIGNAL);
+    if (result == ESRCH) return false;
+    if (result != 0) throw std::system_error(result, std::generic_category(), "sceKernelRaiseException: cannot signal the target thread");
+    return true;
+}
+
+class HostSignalBlock {
+public:
+    HostSignalBlock() {
+        sigset_t blocked;
+        sigemptyset(&blocked);
+        sigaddset(&blocked, HOST_RAISED_SIGNAL);
+        pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    }
+    ~HostSignalBlock() { pthread_sigmask(SIG_SETMASK, &previous, nullptr); }
+    HostSignalBlock(const HostSignalBlock&) = delete;
+    HostSignalBlock& operator=(const HostSignalBlock&) = delete;
+
+private:
+    sigset_t previous;
+};
+
+bool RaiseOn(Pthread thread) {
+    InstallDelivery();
+    if (thread == scePthreadSelf()) return Send(thread);
+    HostSignalBlock block;
+    std::lock_guard lock(thread->_join_mtx);
+    if (thread->_finished.load(std::memory_order_acquire)) return false;
+    return Send(thread);
 }
 #endif
 
@@ -270,29 +478,26 @@ extern "C" {
 
 int APS5_VABI sceKernelInstallExceptionHandler(int signum, void* handler) {
  if (!Allowed(signum) || handler == nullptr) return SCE_KERNEL_ERROR_EINVAL;
- std::lock_guard lock(handlersLock);
- if (handlers[signum] != nullptr) return SCE_KERNEL_ERROR_EAGAIN;
- handlers[signum] = handler;
+ void* expected = nullptr;
+ if (!handlers[signum].compare_exchange_strong(expected, handler, std::memory_order_acq_rel)) return SCE_KERNEL_ERROR_EAGAIN;
  return 0;
 }
 
 int APS5_VABI sceKernelRemoveExceptionHandler(int signum) {
  if (!Allowed(signum)) return SCE_KERNEL_ERROR_EINVAL;
- std::lock_guard lock(handlersLock);
- handlers[signum] = nullptr;
+ handlers[signum].store(nullptr, std::memory_order_release);
  return 0;
 }
 
 int APS5_VABI sceKernelRaiseException(Pthread thread, int signum) {
- if (signum != 30) return SCE_KERNEL_ERROR_EINVAL;
+ if (signum != GUEST_RAISED_SIGNAL) return SCE_KERNEL_ERROR_EINVAL;
  if (thread == nullptr || thread->_finished.load(std::memory_order_acquire)) return SCE_KERNEL_ERROR_ESRCH;
  const auto handler = Handler(signum);
  if (handler == nullptr) throw std::runtime_error("sceKernelRaiseException: no handler installed for the signal");
 #ifdef _WIN32
  return RaiseOn(thread, handler, signum) ? 0 : SCE_KERNEL_ERROR_ESRCH;
 #else
- NotImplemented_nid_no_patch(__func__);
- return 0;
+ return RaiseOn(thread) ? 0 : SCE_KERNEL_ERROR_ESRCH;
 #endif
 }
 

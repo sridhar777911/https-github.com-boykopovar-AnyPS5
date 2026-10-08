@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
@@ -267,7 +268,7 @@ static void sleepUs(std::uint64_t us) {
     struct timespec req{};
     req.tv_sec = static_cast<time_t>(us / 1000000ULL);
     req.tv_nsec = static_cast<long>((us % 1000000ULL) * 1000ULL);
-    nanosleep(&req, nullptr);
+    while (nanosleep(&req, &req) == -1 && errno == EINTR) {}
 }
 
 static void paceVirtualPort(Port& port, bool hasData) {

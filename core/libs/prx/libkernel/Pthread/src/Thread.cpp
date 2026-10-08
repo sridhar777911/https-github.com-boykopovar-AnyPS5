@@ -18,6 +18,7 @@
 
 #ifndef _WIN32
 #include <csetjmp>
+#include <csignal>
 #include <pthread.h>
 #endif
 
@@ -37,6 +38,9 @@ struct ThreadArgs {
     PthreadEntry entry;
     void* arg;
     PthreadPrivate* self;
+#ifndef _WIN32
+    sigset_t signalMask;
+#endif
 };
 
 static std::atomic<thread_dtors_func_t> threadDtors{nullptr};
@@ -99,6 +103,10 @@ static void RegisterStack(PthreadPrivate* self) {
 static void UnregisterStack(PthreadPrivate* self) {
     std::lock_guard lock(stackLock);
     liveStacks.erase(self);
+}
+
+PthreadPrivate* CurrentGuestThread() {
+    return currentThread;
 }
 
 bool GuestThreadStack(std::uintptr_t address, std::uintptr_t* start, std::uintptr_t* end) {
@@ -178,7 +186,13 @@ static void RunThread(std::unique_ptr<ThreadArgs> args) {
     if (!self->stackAddress) SetStackFromHost(self);
     currentThread = self;
     RegisterStack(self);
+#ifndef _WIN32
+    const sigset_t signalMask = args->signalMask;
+#endif
     args.reset();
+#ifndef _WIN32
+    pthread_sigmask(SIG_SETMASK, &signalMask, nullptr);
+#endif
     finishThread(self, entry(arg));
     currentThread = nullptr;
 }
@@ -286,6 +300,8 @@ int APS5_VABI scePthreadCreate(Pthread* thread, const PthreadAttr* attr, Pthread
         p->priority.store((*attr)->_schedpriority, std::memory_order_relaxed);
     }
     if (name) p->name = name;
+    if (currentThread)
+        for (std::size_t word = 0; word < p->signalMask.size(); ++word) p->signalMask[word].store(currentThread->signalMask[word].load());
     std::promise<bool> start;
     auto args = std::make_unique<ThreadArgs>(ThreadArgs{entry, arg, p.get()});
 #ifdef _WIN32
@@ -315,6 +331,10 @@ int APS5_VABI scePthreadCreate(Pthread* thread, const PthreadAttr* attr, Pthread
     if (detached)
         ReleaseThread(published);
 #else
+    sigset_t allSignals;
+    sigfillset(&allSignals);
+    pthread_sigmask(SIG_BLOCK, &allSignals, &args->signalMask);
+    const sigset_t creatorMask = args->signalMask;
     auto* self = p.get();
     p->_thr = std::thread([self, args = std::move(args), ready = start.get_future()]() mutable {
         if (!ready.get()) return;
@@ -333,6 +353,8 @@ int APS5_VABI scePthreadCreate(Pthread* thread, const PthreadAttr* attr, Pthread
         }
         threadExitJump = nullptr;
     });
+    pthread_sigmask(SIG_SETMASK, &creatorMask, nullptr);
+    p->hostThread = p->_thr.native_handle();
     try {
         if (detached) p->_thr.detach();
     } catch (...) {
@@ -418,6 +440,7 @@ Pthread APS5_VABI scePthreadSelf() {
         adoptedThread->_detached = true;
         adoptedThread->_adopted = true;
         adoptedThread->threadId = std::this_thread::get_id();
+        adoptedThread->hostThread = pthread_self();
         SetStackFromHost(adoptedThread.get());
         currentThread = adoptedThread.get();
     }
