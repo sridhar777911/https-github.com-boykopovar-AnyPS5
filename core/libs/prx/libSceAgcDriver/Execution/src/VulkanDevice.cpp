@@ -216,6 +216,7 @@ struct VulkanDevice::State {
     // VK_KHR_timeline_semaphore enabled: the recorder's unlocked waits are available.
     bool timelineSemaphores = false;
     bool computeWave32 = false;
+    std::uint32_t maxComputeSubgroupSize = 0;
     // Indirect draw features enabled (see Graphics::Context).
     bool drawIndirectFirstInstance = false;
     bool multiDrawIndirect = false;
@@ -1027,6 +1028,7 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window) : state(std::make_u
         state->InstanceFunction<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")(selected, &sizeProperties);
         state->computeWave32 = subgroupSizeFeatures.subgroupSizeControl == VK_TRUE && subgroupSize.minSubgroupSize <= 32u && subgroupSize.maxSubgroupSize >= 32u &&
             (subgroupSize.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
+        state->maxComputeSubgroupSize = subgroupSize.maxSubgroupSize;
     }
     if (state->computeWave32) {
         subgroupSizeFeatures = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT};
@@ -3486,8 +3488,8 @@ VulkanDevice::IndirectOutcome VulkanDevice::dispatch(const ShaderRecompiler::Rec
         pipelineInfo.stage.module = objects->module;
         pipelineInfo.stage.pName = "main";
         VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT requiredSubgroup{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT};
-        requiredSubgroup.requiredSubgroupSize = shader.hostSubgroupSize;
-        if (state->computeWave32 && shader.hostSubgroupSize == 32u) pipelineInfo.stage.pNext = &requiredSubgroup;
+        requiredSubgroup.requiredSubgroupSize = std::min(shader.hostSubgroupSize, state->maxComputeSubgroupSize);
+        if (state->computeWave32 && (shader.hostSubgroupSize == 32u || shader.hostSubgroupSize > state->maxComputeSubgroupSize)) pipelineInfo.stage.pNext = &requiredSubgroup;
         pipelineInfo.layout = objects->layout;
         if (profile && shader.spirv.size() > 100000) std::fprintf(stderr, "[dispatch] creating a pipeline for %zu SPIR-V words (program 0x%llx)\n", shader.spirv.size(), static_cast<unsigned long long>(programAddress));
         check(state->DeviceFunction<PFN_vkCreateComputePipelines>("vkCreateComputePipelines")(state->device, context.pipelineCache, 1, &pipelineInfo, nullptr, &objects->pipeline), "vkCreateComputePipelines");
