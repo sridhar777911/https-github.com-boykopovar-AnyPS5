@@ -52,9 +52,18 @@ struct NetMsghdr {
     int flags;
 };
 
+struct NetMemoryPoolStats {
+    std::size_t pool_size;
+    std::size_t max_inuse_size;
+    std::size_t current_inuse_size;
+};
+
 extern "C" {
 std::int64_t APS5_VABI sceNetSendmsg(int, const NetMsghdr*, int);
 std::int64_t APS5_VABI sceNetRecvmsg(int, NetMsghdr*, int);
+int APS5_VABI sceNetPoolCreate(const char*, int, int);
+int APS5_VABI sceNetPoolDestroy(int);
+int APS5_VABI sceNetGetMemoryPoolStats(int, NetMemoryPoolStats*);
 }
 
 static void Require(bool condition) {
@@ -63,6 +72,17 @@ static void Require(bool condition) {
 
 static bool Failed(std::int64_t result, int error) {
     return result == static_cast<int>(0x80410100u | static_cast<unsigned>(error)) && *sceNetErrnoLoc() == error;
+}
+
+static void CheckPoolStats() {
+    const int pool = sceNetPoolCreate("stats", 0x4000, 0);
+    Require(pool > 0);
+    NetMemoryPoolStats stats{1, 1, 1};
+    Require(sceNetGetMemoryPoolStats(pool, &stats) == 0);
+    Require(stats.pool_size == 0x4000 && stats.max_inuse_size == 0 && stats.current_inuse_size == 0);
+    Require(Failed(sceNetGetMemoryPoolStats(pool, nullptr), 22));
+    Require(sceNetPoolDestroy(pool) == 0);
+    Require(Failed(sceNetGetMemoryPoolStats(pool, &stats), 9));
 }
 
 static void CheckMessages(int receiver, int sender, const std::array<std::uint8_t, 16>& address) {
@@ -144,6 +164,7 @@ static void CheckAddressText(int family, const char* text) {
 
 int main() {
     Require(sceNetInit_nid_postfix() == 0);
+    CheckPoolStats();
     CheckAddressText(2, "127.0.0.1");
     CheckAddressText(2, "255.255.255.255");
     CheckAddressText(28, "::1");
