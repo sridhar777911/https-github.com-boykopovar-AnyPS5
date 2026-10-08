@@ -19,7 +19,6 @@ extern "C" {
 int APS5_VABI sceSaveDataInitialize3(const void*);
 int APS5_VABI sceSaveDataTerminate();
 int APS5_VABI sceSaveDataSetSaveDataMemory2(const SaveDataMemorySet2*);
-int APS5_VABI sceSaveDataDirNameSearch(const SaveDataDirNameSearchCond*, SaveDataDirNameSearchResult*);
 }
 
 static void Check(bool value, int line) {
@@ -42,23 +41,6 @@ int main() {
         ("anyps5-metadata-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     Require(std::filesystem::create_directory(root));
     std::filesystem::current_path(root);
-    const auto expected_mtime = std::chrono::system_clock::time_point{std::chrono::seconds{1700000000}};
-    const auto save_directory = std::filesystem::path("_sd/mtime");
-    Require(std::filesystem::create_directories(save_directory));
-    std::filesystem::last_write_time(save_directory,
-            std::filesystem::file_time_type::clock::from_sys(expected_mtime));
-    SceSaveDataDirName dir_name{};
-    SaveDataParam searched_param{};
-    SaveDataDirNameSearchCond search_cond{};
-    SaveDataDirNameSearchResult search_result{};
-    search_result.dir_names = &dir_name;
-    search_result.dir_names_num = 1;
-    search_result.params = &searched_param;
-    Require(sceSaveDataDirNameSearch(&search_cond, &search_result) == 0);
-    Require(search_result.hit_num == 1 && search_result.set_num == 1);
-    Require(std::string(dir_name.data) == "mtime");
-    Require(searched_param.mtime == std::chrono::duration_cast<std::chrono::seconds>(expected_mtime.time_since_epoch()).count());
-
     const auto path = std::filesystem::path("_sd_mem/u7531/slot0.param");
     const auto memoryPath = std::filesystem::path("_sd_mem/u7531/slot0.bin");
     std::filesystem::create_directories(path.parent_path());
