@@ -202,11 +202,15 @@ struct UnnormalizedProof {
 UnnormalizedProof ProveUnnormalized(const ShaderInfo& info, const ResourceSnapshot& snapshot) {
     UnnormalizedProof proof{std::vector<bool>(info.samplers.size()), std::vector<bool>(info.images.size())};
     for (std::uint32_t r = 0; r < info.samplers.size(); r++) {
+        const auto& sampler = info.samplers[r];
         if ((GuestSamplersDescriptor({r}, snapshot)[0] & ForceUnnormalizedBit) == 0u) {
+            if (sampler.foldTexelOffsets) {
+                fail("DescriptorBindingBuilder::Populate a guest sampler without FORCE_UNNORMALIZED is bound to a variant that adds its texel offsets to the coordinates");
+            }
             continue;
         }
-        const auto& sampler = info.samplers[r];
-        const std::uint32_t unsupported = sampler.uses & ~static_cast<std::uint32_t>(SamplerUseExplicitLod);
+        const std::uint32_t allowed = SamplerUseExplicitLod | (sampler.foldTexelOffsets ? SamplerUseOffset : 0u);
+        const std::uint32_t unsupported = sampler.uses & ~allowed;
         if (unsupported != 0u) {
             failUnnormalized(UnnormalizedUseReason(unsupported));
         }

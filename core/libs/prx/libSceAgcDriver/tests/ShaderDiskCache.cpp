@@ -172,7 +172,7 @@ CompiledVariant sampleVariant() {
     image.indirectSearchIterations = 3;
     image.indirectResources = {1, 2, 3};
     info.info.images = {image};
-    info.info.samplers = {{7, 0x10, true, false, SamplerUseExplicitLod | SamplerUseGather}};
+    info.info.samplers = {{7, 0x10, true, false, SamplerUseExplicitLod | SamplerUseGather, true}};
     info.info.sampledPairs = {{0, 0, 0x10}};
     StageInput input{};
     input.kind = StageInputKind::GlobalInvocationId;
@@ -358,6 +358,7 @@ void verifyKeySensitivity() {
     changes("an image sRGB decode", [](SampleRequest& sample) { sample.specialization.images[0].srgbDecode = true; });
     changes("the image count", [](SampleRequest& sample) { sample.specialization.images.emplace_back(); });
     changes("the bound descriptors", [](SampleRequest& sample) { sample.specialization.boundDescriptors.push_back(1); });
+    changes("the samplers whose texel offsets are folded", [](SampleRequest& sample) { sample.specialization.foldTexelOffsets = 1u; });
 
     SampleRequest moved;
     moved.userData[0] ^= 0x10000u;

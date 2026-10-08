@@ -441,6 +441,18 @@ std::uint32_t PackedOffset(SpirvValueEmitContext& ctx, const ImageEmitAccess& ac
     return result;
 }
 
+std::uint32_t FoldedOffsetCoord(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, const SampleSetup& setup) {
+    auto& state = ctx.state;
+    const auto components = setup.dimensionInfo.spatialComponents;
+    if (components != setup.dimensionInfo.coordinateComponents || access.image.cube) {
+        ctx.Fail(access.inst, "adds a texel offset to the coordinates of an array, cube or multisampled image");
+    }
+    const auto type = components == 1u ? TypeF32(state) : TypeF32Vector(state, components);
+    const auto sum = Binary(state, spv::OpFAdd, type, setup.coord, Unary(state, spv::OpConvertSToF, type, PackedOffset(ctx, access, setup.layout)));
+    state.module.AddAnnotation(spv::OpDecorate, sum, spv::DecorationNoContraction);
+    return sum;
+}
+
 std::uint32_t HorizontalOffsets(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
     auto& state = ctx.state;
     const auto components = RdnaImageDimensionInfoFor(access.image.dimension).spatialComponents;
@@ -1223,6 +1235,8 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
             operands.push_back(clamp);
         }
     }
+    const bool foldOffset = setup.layout.offset != NoImageComponent && state.program.Info().samplers.at(mem.sampler).foldTexelOffsets;
+    const bool offsetOperand = setup.layout.offset != NoImageComponent && !foldOffset;
     const auto constantOffset = [&]() -> const IrValue* {
         const auto component = GetRdnaImageAddressComponentLayout(mem.imageSampleFlags, setup.layout.offset);
         const auto argument = component.bitOffset / 32u;
@@ -1230,7 +1244,7 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
         const auto* value = access.address.Argument(argument)->Resolve();
         return value->HasImmediate() ? value : nullptr;
     };
-    if (setup.layout.offset != NoImageComponent && constantOffset() == nullptr) {
+    if (offsetOperand && constantOffset() == nullptr) {
         const bool gatherExtended = std::find(state.supportedCapabilities.begin(), state.supportedCapabilities.end(), static_cast<std::uint32_t>(spv::CapabilityImageGatherExtended)) != state.supportedCapabilities.end();
         if (!state.nonConstantImageOffsets || !gatherExtended) {
             ctx.Fail(access.inst, "has a texel offset that is not a constant, which image sampling takes only with VK_KHR_maintenance8 and shaderImageGatherExtended");
@@ -1238,7 +1252,7 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
         state.module.EmitCapability(spv::CapabilityImageGatherExtended);
         operandMask |= spv::ImageOperandsOffsetMask;
         operands.insert(operands.end() - ((operandMask & spv::ImageOperandsMinLodMask) != 0u ? 1 : 0), PackedOffset(ctx, access, setup.layout));
-    } else if (setup.layout.offset != NoImageComponent) {
+    } else if (offsetOperand) {
         const auto bits = constantOffset()->ImmediateU32();
         std::array<std::uint32_t, 3> values{};
         for (std::uint32_t index = 0; index < setup.dimensionInfo.spatialComponents; index++) {
@@ -1253,9 +1267,10 @@ void EmitSampleOp(SpirvValueEmitContext& ctx, const ImageEmitAccess& access, con
         operands.insert(operands.end() - ((operandMask & spv::ImageOperandsMinLodMask) != 0u ? 1 : 0), offset);
 
     }
+    const auto coord = foldOffset ? FoldedOffsetCoord(ctx, access, setup) : setup.coord;
     const auto sampled = MakeSampledImage(state, mem.resource, mem.sampler, access.slot);
     const auto sample = state.module.AllocateId();
-    std::vector<std::uint32_t> words = {opcode, resultType, sample, sampled, setup.coord};
+    std::vector<std::uint32_t> words = {opcode, resultType, sample, sampled, coord};
     if (setup.dref) {
         words.push_back(drefValue);
     }
