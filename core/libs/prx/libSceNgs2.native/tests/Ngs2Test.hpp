@@ -49,7 +49,7 @@ inline void Check(bool value, int line) {
 
 inline constexpr std::uint32_t Grain = 8;
 
-inline std::vector<std::uint64_t> buffers[32];
+inline std::vector<std::uint64_t> buffers[64];
 inline std::size_t usedBuffers = 0;
 
 inline Ngs2ContextBufferInfo Buffer(const Ngs2ContextBufferInfo& query) {
