@@ -150,6 +150,8 @@ struct MirrorStats {
     std::uint64_t rebuilds = 0;
     std::uint64_t blocksCopied = 0;
     std::uint64_t heapRefills = 0;
+    std::uint64_t sweeps = 0;
+    std::uint64_t heapChecks = 0;
 };
 MirrorStats MirrorCounters();
 void ClearImageMirrors(VkDevice device);

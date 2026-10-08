@@ -83,6 +83,17 @@ struct GuestBufferMemory::AddressSpace {
     std::uint64_t serial = 0;
     GuestAllocations::Lease lease;
     std::vector<Region> base;
+    struct HeapRun {
+        std::uint64_t begin;
+        std::uint64_t bytes;
+        std::size_t first;
+        std::size_t last;
+    };
+    bool mirrored = false;
+    std::vector<std::size_t> writableMirrors;
+    std::vector<ImageMirror*> heapMirrors;
+    std::vector<HeapRun> heapRuns;
+    std::unique_ptr<std::atomic<std::uint64_t>[]> verified;
     std::vector<CopiedRange> copied;
     // The BDA table entries of `base`, in its order.
     std::vector<ShaderRecompiler::BdaAbi::Range> ranges;
@@ -533,6 +544,11 @@ struct ImageMirrors {
     // Refreshes that had to wait for recorded work writing the range.
     std::uint64_t syncs = 0;
     std::uint64_t serials = 0;
+    std::uint64_t version = 0;
+    std::uint64_t pinnedSpace = 0;
+    std::uint64_t pinnedVersion = 0;
+    std::uint64_t sweeps = 0;
+    std::uint64_t heapChecks = 0;
     std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
 };
 
@@ -767,11 +783,30 @@ void refreshMirror(ImageMirror& mirror, std::uint64_t address, std::uint64_t byt
     compareBlocks(blocks);
 }
 
-void refreshHeapMirrors(std::vector<ImageMirror*>& mirrors, std::vector<RefreshBlock>& blocks) {
+void appendChangedBlocks(std::span<ImageMirror* const> mirrors, std::uint64_t generation, std::vector<RefreshBlock>& blocks) {
     constexpr std::uint64_t block = 65536;
-    std::sort(mirrors.begin(), mirrors.end(), [](const ImageMirror* left, const ImageMirror* right) { return left->base < right->base; });
     thread_local std::vector<std::uint8_t>* changedSlot = nullptr;
     auto& changed = ShaderRecompiler::ThreadOwned(changedSlot);
+    Mirrors().heapChecks += mirrors.size();
+    for (auto* const pointer : mirrors) {
+        auto& mirror = *pointer;
+        changed.assign(mirror.generations.size(), 0);
+        GuestMemory::ChangedBlocks(mirror.base, static_cast<std::size_t>(mirror.bytes), mirror.generations, changed);
+        const auto aligned = mirror.base / block * block;
+        const auto end = mirror.base + mirror.bytes;
+        bool refilled = false;
+        for (std::size_t at = 0; at < changed.size(); ++at) {
+            if (changed[at] == 0) continue;
+            const auto from = std::max(mirror.base, aligned + at * block);
+            blocks.push_back({&mirror, from, static_cast<std::size_t>(std::min(end, aligned + (at + 1) * block) - from), generation});
+            refilled = true;
+        }
+        if (refilled) ++Mirrors().heapRefills;
+    }
+}
+
+void refreshHeapMirrors(std::vector<ImageMirror*>& mirrors, std::vector<RefreshBlock>& blocks) {
+    std::sort(mirrors.begin(), mirrors.end(), [](const ImageMirror* left, const ImageMirror* right) { return left->base < right->base; });
     for (std::size_t first = 0; first < mirrors.size();) {
         auto last = first + 1;
         while (last < mirrors.size() && mirrors[last]->base == mirrors[last - 1]->base + mirrors[last - 1]->bytes) ++last;
@@ -780,23 +815,43 @@ void refreshHeapMirrors(std::vector<ImageMirror*>& mirrors, std::vector<RefreshB
         prepareRange(begin, bytes);
         const auto generation = GuestMemory::CollectWrites(begin, static_cast<std::size_t>(bytes));
         Require(generation != 0, "a heap mirror's range is no longer write-watched");
-        for (auto index = first; index < last; ++index) {
-            auto& mirror = *mirrors[index];
-            changed.assign(mirror.generations.size(), 0);
-            GuestMemory::ChangedBlocks(mirror.base, static_cast<std::size_t>(mirror.bytes), mirror.generations, changed);
-            const auto aligned = mirror.base / block * block;
-            const auto end = mirror.base + mirror.bytes;
-            bool refilled = false;
-            for (std::size_t at = 0; at < changed.size(); ++at) {
-                if (changed[at] == 0) continue;
-                const auto from = std::max(mirror.base, aligned + at * block);
-                blocks.push_back({&mirror, from, static_cast<std::size_t>(std::min(end, aligned + (at + 1) * block) - from), generation});
-                refilled = true;
-            }
-            if (refilled) ++Mirrors().heapRefills;
-        }
+        appendChangedBlocks(std::span<ImageMirror* const>(mirrors).subspan(first, last - first), generation, blocks);
         first = last;
     }
+}
+
+void planSpaceMirrors(GuestBufferMemory::AddressSpace& space) {
+    for (std::size_t index = 0; index < space.base.size(); ++index) {
+        const auto& region = space.base[index];
+        if (region.mirror == nullptr) continue;
+        space.mirrored = true;
+        if (!region.mirror->heap) {
+            if (region.mirror->writable) space.writableMirrors.push_back(index);
+            continue;
+        }
+        auto* mirror = region.mirror.get();
+        if (space.heapRuns.empty() || mirror->base != space.heapMirrors.back()->base + space.heapMirrors.back()->bytes) space.heapRuns.push_back({mirror->base, 0, space.heapMirrors.size(), 0});
+        space.heapMirrors.push_back(mirror);
+        auto& run = space.heapRuns.back();
+        run.bytes = mirror->base + mirror->bytes - run.begin;
+        run.last = space.heapMirrors.size();
+    }
+    space.verified = std::make_unique<std::atomic<std::uint64_t>[]>(space.heapRuns.size());
+}
+
+std::vector<std::pair<std::size_t, std::uint64_t>> refreshHeapRuns(const GuestBufferMemory::AddressSpace& space, std::vector<RefreshBlock>& blocks) {
+    std::vector<std::pair<std::size_t, std::uint64_t>> checked;
+    checked.reserve(space.heapRuns.size());
+    for (std::size_t index = 0; index < space.heapRuns.size(); ++index) {
+        const auto& run = space.heapRuns[index];
+        prepareRange(run.begin, run.bytes);
+        const auto generation = GuestMemory::CollectWrites(run.begin, static_cast<std::size_t>(run.bytes));
+        Require(generation != 0, "a heap mirror's range is no longer write-watched");
+        const auto since = space.verified[index].load(std::memory_order_relaxed);
+        if (since == 0 || !GuestMemory::UnchangedSince(run.begin, static_cast<std::size_t>(run.bytes), since)) appendChangedBlocks(std::span<ImageMirror* const>(space.heapMirrors).subspan(run.first, run.last - run.first), generation, blocks);
+        checked.emplace_back(index, generation);
+    }
+    return checked;
 }
 
 // The mirror for a leased image range: the existing one, or a new one when none exists or the
@@ -812,6 +867,7 @@ std::shared_ptr<ImageMirror> acquireMirror(const Context& context, const std::sh
             state.failed.clear();
             state.heapBytes = 0;
             state.device = context.device;
+            ++state.version;
         }
         if (state.failed.contains(range->address)) return nullptr;
         const auto found = state.entries.find(range->address);
@@ -865,6 +921,7 @@ std::shared_ptr<ImageMirror> acquireMirror(const Context& context, const std::sh
     if (const auto found = state.entries.find(range->address); found != state.entries.end() && found->second->heap) state.heapBytes -= found->second->bytes;
     if (heap) state.heapBytes += mirror->bytes;
     state.entries[range->address] = mirror;
+    ++state.version;
     return mirror;
 }
 
@@ -882,16 +939,28 @@ std::shared_ptr<ImageMirror> findMirror(const Context& context, std::uint64_t be
 
 // Drops mirrors whose registered range is gone (a later build made a new one for the replacement).
 void sweepMirrors() {
+    const auto space = Spaces().current.load();
     auto& state = Mirrors();
     std::lock_guard lock(state.mutex);
+    if (space != nullptr && state.pinnedSpace == space->serial && state.pinnedVersion == state.version) return;
+    ++state.sweeps;
+    bool pinned = space != nullptr;
+    std::size_t leased = 0;
     for (auto it = state.entries.begin(); it != state.entries.end();) {
         if (!it->second->range.expired()) {
+            if (pinned) {
+                while (leased < space->lease.size() && space->lease[leased]->address < it->first) ++leased;
+                pinned = leased < space->lease.size() && sameRange(it->second->range, space->lease[leased]);
+            }
             ++it;
             continue;
         }
         if (it->second->heap) state.heapBytes -= it->second->bytes;
         it = state.entries.erase(it);
+        ++state.version;
     }
+    state.pinnedSpace = pinned ? space->serial : 0;
+    state.pinnedVersion = state.version;
 }
 
 void reportMirrors() {
@@ -1094,7 +1163,7 @@ std::string AddressCopyOverflow(std::vector<AddressCopy> copies, std::uint64_t l
 MirrorStats MirrorCounters() {
     auto& state = Mirrors();
     std::lock_guard lock(state.mutex);
-    MirrorStats stats{0, state.heapBytes, state.rebuilds, state.blocksCopied, state.heapRefills};
+    MirrorStats stats{0, state.heapBytes, state.rebuilds, state.blocksCopied, state.heapRefills, state.sweeps, state.heapChecks};
     for (const auto& [base, mirror] : state.entries) stats.heapMirrors += mirror->heap ? 1 : 0;
     return stats;
 }
@@ -1364,6 +1433,7 @@ void GuestBufferMemory::AcquireRegistered() {
     std::vector<RefreshBlock> blocks;
     std::vector<ImageMirror*> heaps;
     bool mirrored = false;
+    bool served = false;
     auto& spaces = Spaces();
     // Read before the lease below is acquired: a mutation ending in between leaves the space
     // stale by its generation, never newer than it (see AddressSpace).
@@ -1391,11 +1461,11 @@ void GuestBufferMemory::AcquireRegistered() {
             // an existing mirror. The preparation may wait for recorded work, whose completions can
             // retire an import the space's regions point at: UploadFinish re-checks the epoch
             // before any of them is dereferenced.
-            for (const auto& region : space->base) {
-                if (region.mirror == nullptr) continue;
-                mirrored = true;
-                if (region.mirror->heap) heaps.push_back(region.mirror.get());
-                else if (region.mirror->writable && prepareRefresh(*region.mirror, region.begin, region.end - region.begin)) appendBlocks(blocks, *region.mirror, region.begin, region.end - region.begin);
+            served = true;
+            mirrored = space->mirrored;
+            for (const auto index : space->writableMirrors) {
+                const auto& region = space->base[index];
+                if (prepareRefresh(*region.mirror, region.begin, region.end - region.begin)) appendBlocks(blocks, *region.mirror, region.begin, region.end - region.begin);
             }
             lap(timing.mirrorsUs, at);
         }
@@ -1507,16 +1577,20 @@ void GuestBufferMemory::AcquireRegistered() {
                 }
                 regions = std::move(extras);
                 lease.clear();
+                planSpaceMirrors(*built);
                 space = std::move(built);
                 spaces.droppedByWaiter.store(false, std::memory_order_relaxed);
                 spaces.current.store(space);
             }
         }
     }
-    refreshHeapMirrors(heaps, blocks);
+    std::vector<std::pair<std::size_t, std::uint64_t>> checked;
+    if (served) checked = refreshHeapRuns(*space, blocks);
+    else refreshHeapMirrors(heaps, blocks);
     lap(timing.mirrorsUs, at);
     const auto copiedBefore = Mirrors().blocksCopied;
     compareBlocks(blocks);
+    for (const auto& [run, collected] : checked) space->verified[run].store(collected, std::memory_order_relaxed);
     lap(timing.compareUs, at);
     if (profile) {
         timing.blocksCompared += blocks.size();
