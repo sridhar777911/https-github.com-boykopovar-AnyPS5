@@ -491,13 +491,18 @@ bool TranslationContext::floatTernary(const RdnaInstruction& inst, IrOpcode opco
 }
 
 bool TranslationContext::vFmaLegacyF32(const RdnaInstruction& inst) {
-    IrValue* lhs = readOperand(sourceAt(inst, 0u), IrType::F32);
-    IrValue* rhs = readOperand(sourceAt(inst, 1u), IrType::F32);
-    IrValue* addend = readOperand(sourceAt(inst, 2u), IrType::F32);
+    const auto flush = [&](IrValue* value) {
+        const IrU32 bits(ir.BitCastU32(*value));
+        const IrU1 denormal(ir.ULessThan(ir.BitwiseAnd(bits.Value(), ir.Constant(0x7fffffffu)), ir.Constant(0x00800000u)));
+        return &ir.BitCastF32(ir.Select(denormal.Value(), ir.BitwiseAnd(bits.Value(), ir.Constant(0x80000000u)), bits.Value()));
+    };
+    IrValue* lhs = flush(readOperand(sourceAt(inst, 0u), IrType::F32));
+    IrValue* rhs = flush(readOperand(sourceAt(inst, 1u), IrType::F32));
+    IrValue* addend = flush(readOperand(sourceAt(inst, 2u), IrType::F32));
     const auto isZero = [&](IrValue* value) { return IrU1(ir.IEqual(ir.BitwiseAnd(ir.BitCastU32(*value), ir.Constant(0x7fffffffu)), ir.Constant(0u))); };
     const IrU1 zero(ir.LogicalOr(isZero(lhs).Value(), isZero(rhs).Value()));
-    const auto factor = [&](IrValue* value) { return &ir.Emit(IrOpcode::SelectF32, IrType::F32, {&zero.Value(), &ir.ConstantF32(0.0f), value}); };
-    writeOperand(inst.destination, &ir.Emit(IrOpcode::FPFma32, IrType::F32, {factor(lhs), factor(rhs), addend}));
+    IrValue* product = flush(&ir.Emit(IrOpcode::SelectF32, IrType::F32, {&zero.Value(), &ir.ConstantF32(0.0f), &ir.Emit(IrOpcode::FPMul32, IrType::F32, {lhs, rhs})}));
+    writeOperand(inst.destination, flush(&ir.Emit(IrOpcode::FPAdd32, IrType::F32, {product, addend})));
     return true;
 }
 
