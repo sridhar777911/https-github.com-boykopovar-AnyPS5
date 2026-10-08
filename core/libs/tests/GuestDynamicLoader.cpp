@@ -38,6 +38,7 @@ int main(int argc, char** argv) {
     auto add = reinterpret_cast<Add>(dlsym_nid_postfix(module, "GuestModuleAdd"));
     Require(add && add(17, 25) == 42);
     Require(dlsym_nid_postfix(reinterpret_cast<void*>(-2), "GuestModuleAdd") == reinterpret_cast<void*>(add));
+    Require(dlsym_nid_postfix(nullptr, "GuestModuleAdd") == reinterpret_cast<void*>(add));
 #ifndef _WIN32
     auto mul = reinterpret_cast<Add>(dlsym_nid_postfix(module, "GuestModuleMul"));
     Require(mul && mul(6, 7) == 42);
@@ -88,4 +89,9 @@ int main(int argc, char** argv) {
     Require(ThrowsRuntimeError([] { _sceKernelRtldThreadAtexitDecrement_nid_postfix(reinterpret_cast<const void*>(&Require)); }));
     int local = 0;
     Require(ThrowsRuntimeError([&] { _sceKernelRtldThreadAtexitIncrement_nid_postfix(&local); }));
+#ifndef _WIN32
+    Require(dlsym_nid_postfix(nullptr, "malloc") == nullptr);
+    Require(dlsym_nid_postfix(nullptr, "dlopen") == nullptr);
+    Require(dlsym_nid_postfix(nullptr, "pthread_create") == nullptr);
+#endif
 }
