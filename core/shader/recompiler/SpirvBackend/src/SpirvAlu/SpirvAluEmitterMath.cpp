@@ -827,7 +827,12 @@ std::uint32_t EmitFPUnordEqual32(SpirvEmitterState& state, std::uint32_t arg0, s
 }
 
 std::uint32_t EmitFPOrdNotEqual32(SpirvEmitterState& state, std::uint32_t arg0, std::uint32_t arg1) {
-    return EmitNative<spv::OpFOrdNotEqual, IrType::U1>(state, arg0, arg1);
+    const auto ordered = [&](std::uint32_t value) {
+        const auto magnitude = EmitNative<spv::OpBitwiseAnd, IrType::U32>(state, EmitNative<spv::OpBitcast, IrType::U32>(state, value), ConstantU32(state, 0x7fffffffu));
+        return EmitNative<spv::OpULessThanEqual, IrType::U1>(state, magnitude, ConstantU32(state, 0x7f800000u));
+    };
+    const auto bothOrdered = EmitNative<spv::OpLogicalAnd, IrType::U1>(state, ordered(arg0), ordered(arg1));
+    return EmitNative<spv::OpLogicalAnd, IrType::U1>(state, EmitNative<spv::OpFUnordNotEqual, IrType::U1>(state, arg0, arg1), bothOrdered);
 }
 
 std::uint32_t EmitFPUnordNotEqual32(SpirvEmitterState& state, std::uint32_t arg0, std::uint32_t arg1) {
