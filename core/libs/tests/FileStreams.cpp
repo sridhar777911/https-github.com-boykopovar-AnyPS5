@@ -1,5 +1,6 @@
 #include "prx/libc/include/FileStream.hpp"
 #include <array>
+#include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -51,10 +52,10 @@ int main(int argc, char** argv) {
     Require(std::strcmp(buffer.data(), payload) == 0);
     Require(fread_nid_postfix(buffer.data(), 1, buffer.size(), stream) == 0);
     ExpectException([&] { fputs_nid_postfix(nullptr, stream); });
-    ExpectException([&] { fseek_nid_postfix(stream, 0, -1); });
-    Require(fclose_nid_postfix(stream) == 0);
-    stream = fopen_nid_postfix(argv[1], "rb");
-    ExpectException([&] { fwrite_nid_postfix(payload, 1, sizeof(payload), stream); });
+    ExpectException([&] { fwrite_nid_postfix(nullptr, 1, sizeof(payload), stream); });
+    errno = 0;
+    Require(fseek_nid_postfix(stream, 0, -1) == -1);
+    Require(errno == EINVAL);
     Require(fclose_nid_postfix(stream) == 0);
     ExpectException([] { fputs_nid_postfix("invalid stream", nullptr); });
     ExpectException([] { fopen_nid_postfix(nullptr, "r"); });
@@ -62,6 +63,8 @@ int main(int argc, char** argv) {
     closed.Close();
     ExpectException([&] { fflush_nid_postfix(&closed); });
     Require(std::remove(argv[1]) == 0);
-    ExpectException([&] { fopen_nid_postfix(argv[1], "rb"); });
+    errno = 0;
+    Require(fopen_nid_postfix(argv[1], "rb") == nullptr);
+    Require(errno == ENOENT);
     std::cout << "PASS: stream objects, file operations, EOF and error handling\n";
 }
