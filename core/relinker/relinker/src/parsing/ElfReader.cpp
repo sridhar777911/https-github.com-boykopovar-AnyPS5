@@ -102,6 +102,9 @@ ElfHeader ElfReader::ReadHeader() const {
 
 std::vector<ProgramHeader> ElfReader::ReadProgramHeaders() const {
     const ElfHeader header = ReadHeader();
+    if (header.ProgramHeaderCount != 0 && header.ProgramHeaderEntrySize != 56) {
+        throw RelinkerException("Invalid ELF program header entry size: expected 56 bytes", 0x36);
+    }
 
     std::vector<ProgramHeader> headers;
     FileByteOffset offset = header.ProgramHeaderOffset;
