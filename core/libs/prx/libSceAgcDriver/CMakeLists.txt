@@ -370,10 +370,24 @@ add_custom_command(
         VERBATIM
 )
 
+set(agcSampleArrayShaderSource ${CMAKE_CURRENT_SOURCE_DIR}/tests/shaders/SampleArray.comp)
+set(agcSampleArrayShaderSpv ${agcTestShaderGeneratedRoot}/SampleArray.spv)
+set(agcSampleArrayShaderHeader ${agcTestShaderGeneratedRoot}/SampleArray_spv.h)
+add_custom_command(
+        OUTPUT "${agcSampleArrayShaderHeader}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${agcTestShaderGeneratedRoot}"
+        COMMAND "$<TARGET_FILE:glslang-standalone>" -V --target-env vulkan1.1 -o "${agcSampleArrayShaderSpv}" "${agcSampleArrayShaderSource}"
+        COMMAND ${CMAKE_COMMAND} -DINPUT=${agcSampleArrayShaderSpv} -DOUTPUT=${agcSampleArrayShaderHeader}
+        -DSYMBOL=SAMPLE_ARRAY_SPV -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_spirv.cmake"
+        DEPENDS "${agcSampleArrayShaderSource}" glslang-standalone
+        VERBATIM
+)
+
 add_test_executable(agc_driver_recorder_tests EXCLUDE_FROM_ALL
         tests/Recorder.cpp
         tests/ResidentPresent.cpp
         ${agcSampleLodShaderHeader}
+        ${agcSampleArrayShaderHeader}
 )
 
 target_include_directories(agc_driver_recorder_tests PRIVATE
