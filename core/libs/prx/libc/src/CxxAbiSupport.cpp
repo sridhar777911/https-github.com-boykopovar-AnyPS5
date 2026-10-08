@@ -18,13 +18,47 @@
 #include <regex>
 #include <functional>
 #include <mutex>
+#include <memory>
 
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/ApplicationHeap.hpp"
 
 extern "C" {
 
 void* APS5_VABI __cxa_demangle_nid_postfix(const char* mangled, char* buf, std::size_t* len, int* status) {
-    return abi::__cxa_demangle(mangled, buf, len, status);
+    if (mangled == nullptr || (buf != nullptr && len == nullptr)) {
+        if (status != nullptr) *status = -3;
+        return nullptr;
+    }
+
+    int nativeStatus = 0;
+    std::unique_ptr<char, decltype(&std::free)> nativeResult(
+        abi::__cxa_demangle(mangled, nullptr, nullptr, &nativeStatus), &std::free);
+    if (!nativeResult) {
+        if (status != nullptr) *status = nativeStatus;
+        return nullptr;
+    }
+
+    const std::size_t required = std::strlen(nativeResult.get()) + 1;
+    char* result = buf;
+    bool updateLength = false;
+    try {
+        if (result == nullptr) {
+            result = static_cast<char*>(ApplicationHeapAllocate_nid_no_patch(required));
+            updateLength = len != nullptr;
+        } else if (*len < required) {
+            result = static_cast<char*>(ApplicationHeapReallocate_nid_no_patch(result, required));
+            updateLength = true;
+        }
+    } catch (const std::bad_alloc&) {
+        if (status != nullptr) *status = -1;
+        return nullptr;
+    }
+
+    std::memcpy(result, nativeResult.get(), required);
+    if (updateLength) *len = required;
+    if (status != nullptr) *status = 0;
+    return result;
 }
 
 int APS5_VABI __cxa_thread_atexit_impl_nid_postfix(void (*func)(void*), void* arg, void* dso) {
