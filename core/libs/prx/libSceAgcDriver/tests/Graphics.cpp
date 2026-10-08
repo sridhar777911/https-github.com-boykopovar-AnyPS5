@@ -23,6 +23,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -815,6 +816,43 @@ void metadataPassTests() {
             std::array<std::uint32_t, 4> copied{};
             copied.fill(0x5a5a5a5au);
             Require(AgcDriver::Graphics::FillDccClear(tenBitPass->targets[0].format, clear.keys, tenBitPass->targets[0].dccAlphaOnMsb, std::as_writable_bytes(std::span(copied))) && std::ranges::all_of(copied, [&](std::uint32_t word) { return word == clear.texel; }), "a copied " + name + " target under " + clear.code + " keys was not filled with its 10/10/10/2 texel");
+        }
+    }
+
+    constexpr std::uint32_t tiledSide = 128;
+    constexpr std::size_t tiledBytes = tiledSide * tiledSide * 4;
+    constexpr std::size_t blockAlignment = 65536;
+    const auto keyCount = AgcDriver::Graphics::DccKeyCount(AgcDriver::Graphics::TextureTileMode::kR64KBX, 4, tiledSide, tiledSide, tiledBytes);
+    Require(keyCount == 4096 && AgcDriver::Graphics::DccKeyBytes(tiledBytes) == 256, "the 128x128 SW_64KB_R_X DCC extent changed");
+    std::vector<std::byte> tiledBlock(blockAlignment + tiledBytes + keyCount);
+    const auto tiledAddress = (reinterpret_cast<std::uintptr_t>(tiledBlock.data()) + blockAlignment - 1) / blockAlignment * blockAlignment;
+    auto* tiledTexels = reinterpret_cast<std::uint8_t*>(tiledAddress);
+    auto* tiledKeys = tiledTexels + tiledBytes;
+    for (const bool pipeAligned : {true, false}) {
+        auto tiled = queue;
+        tiled.context[0x3b8] |= (static_cast<std::uint32_t>(AgcDriver::Graphics::ColorTileMode::RenderTarget) << 14u) | (pipeAligned ? 1u << 30u : 0u);
+        tiled.context[0x3b0] = ((tiledSide - 1u) << 14u) | (tiledSide - 1u);
+        tiled.context[0x318] = static_cast<std::uint32_t>(tiledAddress >> 8u);
+        tiled.context[0x390] = static_cast<std::uint32_t>(tiledAddress >> 40u);
+        tiled.context[0x325] = static_cast<std::uint32_t>((tiledAddress + tiledBytes) >> 8u);
+        tiled.context[0x3a8] = static_cast<std::uint32_t>((tiledAddress + tiledBytes) >> 40u);
+        for (const auto offset : {0xdu, 0x82u, 0x91u, 0x95u}) tiled.context[offset] = (tiledSide << 16u) | tiledSide;
+        tiled.context[0x10f] = std::bit_cast<std::uint32_t>(64.0f);
+        tiled.context[0x110] = std::bit_cast<std::uint32_t>(64.0f);
+        tiled.context[0x111] = std::bit_cast<std::uint32_t>(-64.0f);
+        tiled.context[0x112] = std::bit_cast<std::uint32_t>(64.0f);
+        const auto tiledPass = DecodeColorMetadataPass(tiled);
+        const std::string alignment = pipeAligned ? "pipe-aligned" : "unaligned";
+        Require(tiledPass.has_value() && tiledPass->targets.size() == 1 && tiledPass->targets[0].tileMode == AgcDriver::Graphics::ColorTileMode::RenderTarget && tiledPass->targets[0].bytes == tiledBytes && tiledPass->targets[0].dccAddress == tiledAddress + tiledBytes && tiledPass->targets[0].dccPipeAligned == pipeAligned, "the 128x128 SW_64KB_R_X metadata pass target with " + alignment + " DCC changed");
+        const auto expected = pipeAligned ? keyCount : AgcDriver::Graphics::DccKeyBytes(tiledBytes);
+        for (const auto& [key, texel, code] : {std::tuple{std::uint8_t{0x20}, 0x11223344u, "register"}, std::tuple{std::uint8_t{0xc0}, 0xffffffffu, "1111"}}) {
+            std::memset(tiledTexels, 0x5a, tiledBytes);
+            std::memset(tiledKeys, key, keyCount);
+            AgcDriver::Graphics::RunColorMetadataPass(context, *tiledPass);
+            const auto stored = static_cast<std::size_t>(std::count(tiledKeys, tiledKeys + keyCount, std::uint8_t{0xff}));
+            bool filled = true;
+            for (std::size_t offset = 0; offset < tiledBytes; offset += 4) filled = filled && std::memcmp(tiledTexels + offset, &texel, 4) == 0;
+            Require(filled && stored == expected && std::all_of(tiledKeys, tiledKeys + expected, [](std::uint8_t value) { return value == 0xff; }), std::string("a ") + code + " fast clear eliminate of a 128x128 SW_64KB_R_X target with " + alignment + " DCC stored uncompressed keys over " + std::to_string(stored) + " of its " + std::to_string(keyCount) + " DCC key bytes, expected " + std::to_string(expected));
         }
     }
 }

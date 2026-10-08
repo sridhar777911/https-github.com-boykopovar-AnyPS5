@@ -1,10 +1,13 @@
 #include "GraphicsTests.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/DccMetadata.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/GuestTextureResource.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/TextureTiling.hpp"
+#include <algorithm>
 #include <array>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -291,6 +294,28 @@ void RunGuestTextureResourceTests() {
     meta.dccAlphaPos = true;
     const auto compressed = DecodeTextureResource(pack(meta));
     Require(compressed.dccAddress == 0x100 && compressed.dccAlphaOnMsb, "DCC metadata was decoded wrongly");
+
+    Fields storage = base;
+    storage.base40 = 0x1000;
+    storage.width = 1920;
+    storage.height = 1080;
+    storage.tileModeRaw = 27;
+    storage.metaCompress = true;
+    constexpr std::uint64_t storageBytes = 15u * 9u * 65536u;
+    constexpr std::size_t extentKeys = 49152;
+    std::vector<std::uint8_t> storageKeys(extentKeys + 256);
+    const auto keysAddress = (reinterpret_cast<std::uintptr_t>(storageKeys.data()) + 255u) / 256u * 256u;
+    const auto* keys = reinterpret_cast<const std::uint8_t*>(keysAddress);
+    storage.metaAddr = keysAddress >> 8u;
+    for (const bool pipeAligned : {true, false}) {
+        storage.metaPipeAligned = pipeAligned;
+        const auto image = DecodeTextureResource(pack(storage));
+        const auto expected = pipeAligned ? extentKeys : static_cast<std::size_t>(storageBytes / 256u);
+        std::fill(storageKeys.begin(), storageKeys.end(), std::uint8_t{0x00});
+        MarkDccUncompressed(image.dccAddress, storageBytes, DccKeyCount(image, storageBytes));
+        const auto stored = static_cast<std::size_t>(std::count(keys, keys + extentKeys, std::uint8_t{0xff}));
+        Require(image.dccPipeAligned == pipeAligned && stored == expected && std::all_of(keys, keys + expected, [](std::uint8_t key) { return key == 0xff; }), std::string("a 1920x1080 SW_64KB_R_X storage image with ") + (pipeAligned ? "pipe-aligned" : "unaligned") + " DCC stored " + std::to_string(stored) + " uncompressed keys, expected " + std::to_string(expected));
+    }
 
     Fields badSwizzle = base;
     badSwizzle.bcSwizzle = 1;

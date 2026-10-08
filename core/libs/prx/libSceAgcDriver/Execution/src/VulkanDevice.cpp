@@ -1915,37 +1915,30 @@ std::shared_ptr<Graphics::StorageTexture> PresentableResident(const Graphics::Co
     return resident;
 }
 
-Graphics::DccKeys DisplayKeys(const DisplayBuffer& buffer, std::size_t bytes) {
-    const auto keys = Graphics::CurrentDccKeys(buffer.dccAddress, bytes);
-    if (keys != Graphics::DccKeys::Uncompressed && !Graphics::IsDccClear(keys)) {
-        char message[256];
-        std::snprintf(message, sizeof(message), "VideoOut: display buffer 0x%llx reads %s DCC keys at 0x%llx: presenting DCC metadata that is not uniformly uncompressed or fast-cleared is not implemented", static_cast<unsigned long long>(buffer.address), Graphics::DccKeysName(keys), static_cast<unsigned long long>(buffer.dccAddress));
-        throw std::runtime_error(message);
-    }
-    return keys;
+Graphics::DccKeys ResidentKeys(const Graphics::StorageTexture& resident) {
+    const auto& own = resident.Descriptor();
+    GuestMemory::CollectWritesUncached(own.dccAddress, Graphics::DccKeyBytes(resident.GuestBytes()));
+    return Graphics::ProvedClearKeys(own, resident.GuestBytes(), resident.KeyProof());
 }
 
-bool ResidentServesDisplay(const Graphics::StorageTexture& resident, const DisplayBuffer& buffer, std::size_t bytes) {
-    const auto keys = DisplayKeys(buffer, bytes);
+bool ResidentServesDisplay(const Graphics::StorageTexture& resident, const DisplayBuffer& buffer) {
+    const auto keys = DisplayBufferKeys(buffer);
     if (keys == Graphics::DccKeys::ClearRegister) {
         char message[320];
         std::snprintf(message, sizeof(message), "VideoOut: display buffer 0x%llx reads register-clear DCC keys at 0x%llx over the pending image 0x%llx (DCC 0x%llx, filled keys %s): whether its results precede the clear is not modeled", static_cast<unsigned long long>(buffer.address), static_cast<unsigned long long>(buffer.dccAddress), static_cast<unsigned long long>(resident.Descriptor().baseAddress), static_cast<unsigned long long>(resident.Descriptor().dccAddress), Graphics::DccKeysName(resident.FilledKeys()));
         throw std::runtime_error(message);
     }
     if (Graphics::IsDccClear(resident.FilledKeys()) && resident.FilledKeys() == keys) return false;
-    return Graphics::StorageImageServesKeys(resident, buffer.dccAddress);
+    return Graphics::KeysServeSurface(resident.Descriptor().dccAddress, resident.UploadedKeys(), resident.FilledKeys(), buffer.dccAddress, [&] { return ResidentKeys(resident); }, [&] { return keys; });
 }
 
 bool ResidentKeysMoved(const Graphics::StorageTexture& resident) {
-    const auto& own = resident.Descriptor();
-    if (own.dccAddress == 0) return false;
-    GuestMemory::CollectWritesUncached(own.dccAddress, Graphics::DccKeyBytes(resident.GuestBytes()));
-    return Graphics::ProvedClearKeys(own, resident.GuestBytes(), resident.KeyProof()) != resident.UploadedKeys();
+    return resident.Descriptor().dccAddress != 0 && ResidentKeys(resident) != resident.UploadedKeys();
 }
 
 std::optional<std::array<std::byte, 4>> CompressedClearPixel(const DisplayBuffer& buffer, std::size_t bytes) {
     GuestMemory::FlushGpuWrites(buffer.address, bytes);
-    const auto keys = DisplayKeys(buffer, bytes);
+    const auto keys = DisplayBufferKeys(buffer);
     if (keys == Graphics::DccKeys::Uncompressed) return std::nullopt;
     return DisplayBufferClearPixel(buffer, keys);
 }
@@ -1999,7 +1992,7 @@ bool VulkanDevice::PresentDisplayBuffer(const DisplayBuffer& buffer) {
     if (!NoResidentPresent()) {
         bool pending = false;
         resident = PresentableResident(graphicsContext(), buffer, filter, pending, convert);
-        if (resident != nullptr && buffer.dccAddress != 0 && !ResidentServesDisplay(*resident, buffer, bytes)) {
+        if (resident != nullptr && buffer.dccAddress != 0 && !ResidentServesDisplay(*resident, buffer)) {
             resident.reset();
             convert = false;
         }

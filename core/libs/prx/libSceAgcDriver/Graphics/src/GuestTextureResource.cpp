@@ -115,7 +115,6 @@ GuestTextureResource DecodeTextureResource(std::span<const std::uint32_t> words)
     static_cast<void>(maxCompBlkSize);
     // Surfaces are always written uncompressed here (render targets and storage images bypass DCC), so
     // only the fast-clear keys in DCC metadata change what a read returns (see DccMetadata.hpp).
-    static_cast<void>(metaPipeAligned);
     static_cast<void>(writeCompress);
     if (dccColorTransf) {
         static bool reported = false;
@@ -189,6 +188,7 @@ GuestTextureResource DecodeTextureResource(std::span<const std::uint32_t> words)
     result.dstSelW = static_cast<std::uint8_t>(dstSelW);
     result.dccAddress = metaCompress ? metaAddr << 8u : 0u;
     result.dccAlphaOnMsb = dccAlphaPos;
+    result.dccPipeAligned = metaPipeAligned;
     result.minLod = minLod;
     if (baseLevel > maxMip) {
         Require(LevelsFitAllocation(result, lastLevel + 1u), "guest texture descriptor starts past the surface's last mip level at levels that would move the surface's own" + describe());
