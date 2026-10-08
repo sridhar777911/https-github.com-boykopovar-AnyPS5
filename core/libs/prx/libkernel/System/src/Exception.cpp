@@ -190,6 +190,22 @@ bool Exited(HANDLE native) {
     return WaitForSingleObject(native, 0) == WAIT_OBJECT_0;
 }
 
+bool RestoringContext(DWORD64 rip) {
+    static const std::array<DWORD64, 2> stubs = [] {
+        const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        return std::array<DWORD64, 2>{reinterpret_cast<DWORD64>(GetProcAddress(ntdll, "NtContinue")), reinterpret_cast<DWORD64>(GetProcAddress(ntdll, "NtContinueEx"))};
+    }();
+    for (const DWORD64 stub : stubs)
+        if (stub != 0 && rip - stub < 0x20) return true;
+    return false;
+}
+
+bool InWinpthread(DWORD64 rip) {
+    static const HMODULE winpthread = GetModuleHandleW(L"libwinpthread-1.dll");
+    MEMORY_BASIC_INFORMATION info{};
+    return winpthread != nullptr && VirtualQuery(reinterpret_cast<const void*>(rip), &info, sizeof(info)) == sizeof(info) && info.AllocationBase == winpthread;
+}
+
 bool RaiseOn(Pthread thread, GuestExceptionHandler handler, int signum) {
     if (thread == scePthreadSelf()) {
         CONTEXT context{};
@@ -199,26 +215,31 @@ bool RaiseOn(Pthread thread, GuestExceptionHandler handler, int signum) {
     }
     const auto native = static_cast<HANDLE>(thread->nativeHandle);
     auto queued = std::make_unique<Delivery>(Delivery{handler, signum, {}});
-    if (SuspendThread(native) == static_cast<DWORD>(-1)) {
-        if (Exited(native)) return false;
-        throw std::runtime_error("sceKernelRaiseException: cannot suspend the target thread");
-    }
-    if (Exited(native)) {
-        ResumeThread(native);
-        return false;
-    }
-    if (thread->waitCount.load(std::memory_order_seq_cst) > 0) {
-        const bool accepted = QueueUserAPC(WaitingEntry, native, reinterpret_cast<ULONG_PTR>(queued.get())) != 0;
-        ResumeThread(native);
-        if (!accepted) throw std::runtime_error("sceKernelRaiseException: cannot queue delivery to the waiting thread");
-        queued.release();
-        return true;
-    }
     alignas(16) Delivery delivery{handler, signum, {}};
-    delivery.context.ContextFlags = CONTEXT_FULL | CONTEXT_FLOATING_POINT;
-    if (!GetThreadContext(native, &delivery.context)) {
+    for (;;) {
+        if (SuspendThread(native) == static_cast<DWORD>(-1)) {
+            if (Exited(native)) return false;
+            throw std::runtime_error("sceKernelRaiseException: cannot suspend the target thread");
+        }
+        if (Exited(native)) {
+            ResumeThread(native);
+            return false;
+        }
+        delivery.context.ContextFlags = CONTEXT_FULL | CONTEXT_SEGMENTS;
+        if (!GetThreadContext(native, &delivery.context)) {
+            ResumeThread(native);
+            throw std::runtime_error("sceKernelRaiseException: cannot read the target thread context");
+        }
+        if (thread->waitCount.load(std::memory_order_seq_cst) > 0) {
+            const bool accepted = QueueUserAPC(WaitingEntry, native, reinterpret_cast<ULONG_PTR>(queued.get())) != 0;
+            ResumeThread(native);
+            if (!accepted) throw std::runtime_error("sceKernelRaiseException: cannot queue delivery to the waiting thread");
+            queued.release();
+            return true;
+        }
+        if (!RestoringContext(delivery.context.Rip) && !InWinpthread(delivery.context.Rip)) break;
         ResumeThread(native);
-        throw std::runtime_error("sceKernelRaiseException: cannot read the target thread context");
+        SwitchToThread();
     }
     const DWORD64 slot = (delivery.context.Rsp - RedZone - sizeof(Delivery)) & ~static_cast<DWORD64>(15);
     if (!StackWritable(slot - HomeArea - 8, delivery.context.Rsp - RedZone)) {
