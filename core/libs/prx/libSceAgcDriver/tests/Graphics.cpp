@@ -626,6 +626,15 @@ void DepthStencilTests() {
     queue.context[0x10b] = 0;
     queue.context[0x000] = 1;
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "DB_RENDER_CONTROL");
+    queue.context[0x000] = 0x22;
+    state = AgcDriver::Graphics::DecodeState(queue);
+    const auto clears = [](const VkStencilOpState& face) {
+        return face.compareOp == VK_COMPARE_OP_ALWAYS && face.passOp == VK_STENCIL_OP_REPLACE && face.failOp == VK_STENCIL_OP_REPLACE && face.depthFailOp == VK_STENCIL_OP_REPLACE && face.writeMask == 0xff && face.reference == 7;
+    };
+    Require(state.stencilTest && clears(state.stencilFront) && clears(state.stencilBack), "a STENCIL_CLEAR_ENABLE draw does not store DB_STENCIL_CLEAR");
+    queue.context[0x200] = 0;
+    state = AgcDriver::Graphics::DecodeState(queue);
+    Require(state.stencilTest && clears(state.stencilFront), "a STENCIL_CLEAR_ENABLE draw without a stencil test does not store DB_STENCIL_CLEAR");
     queue = makeState();
     queue.context[0x31b] = 1u << 26u;
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "mip exceeds");
