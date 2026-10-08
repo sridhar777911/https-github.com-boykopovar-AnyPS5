@@ -324,6 +324,7 @@ constexpr MemoryOpcodeInfo dsOpcodes[] = {
     {0x76u, RdnaOpcode::DsReadB64, 2, 32, false, false, false},
     {0x77u, RdnaOpcode::DsRead2B64, 4, 32, false, false, false},
     {0x78u, RdnaOpcode::DsRead2st64B64, 4, 32, false, false, false},
+    {0x7eu, RdnaOpcode::DsCondxchg32RtnB64, 2, 32, false, false, false},
     {0xa0u, RdnaOpcode::DsWriteB8D16Hi, 1, 8, false, false, false},
     {0xa1u, RdnaOpcode::DsWriteB16D16Hi, 1, 16, false, false, false},
     {0xa2u, RdnaOpcode::DsReadU8D16, 1, 8, false, false, false},
@@ -526,6 +527,7 @@ bool isDsAtomicOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::DsOrRtnB64:
         case RdnaOpcode::DsXorRtnB64:
         case RdnaOpcode::DsWrxchgRtnB64:
+        case RdnaOpcode::DsCondxchg32RtnB64:
         case RdnaOpcode::DsMinRtnF64:
         case RdnaOpcode::DsMaxRtnF64:
             return true;
@@ -917,6 +919,14 @@ RdnaInstruction DecodeRdnaDs(std::uint32_t programCounter, std::span<const std::
     }
     if (info.opcode == RdnaOpcode::DsWriteAddtidB32 && data1 != 0u) {
         throw std::runtime_error("DS write addtid data1 operand is not supported");
+    }
+    if (info.opcode == RdnaOpcode::DsCondxchg32RtnB64) {
+        if (data0 + 2u > 256u) {
+            throw std::runtime_error("DS conditional exchange source register range overflow");
+        }
+        if (vdst + 2u > 256u) {
+            throw std::runtime_error("DS conditional exchange destination register range overflow");
+        }
     }
     if (info.opcode == RdnaOpcode::DsReadAddtidB32 && (data0 != 0u || data1 != 0u)) {
         throw std::runtime_error("DS read addtid data operands are not supported");
