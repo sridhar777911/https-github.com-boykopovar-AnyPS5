@@ -104,6 +104,11 @@ enum class ConservativeZExport : std::uint8_t {
     GreaterThanZ
 };
 
+enum class ColorExportPacking : std::uint8_t {
+    None,
+    Unorm10_11_11
+};
+
 struct ShaderPixelStageInfo {
     std::uint32_t interpolatorCount;
     std::array<std::uint32_t, 32> interpolatorSettings;
@@ -128,6 +133,7 @@ struct ShaderPixelStageInfo {
     ConservativeZExport conservativeZExport;
     std::array<std::uint8_t, 8> targetOutputMode;
     std::array<std::uint8_t, 8> targetExportMapping;
+    std::array<ColorExportPacking, 8> targetExportPacking;
 };
 
 struct ShaderVertexBufferResource {

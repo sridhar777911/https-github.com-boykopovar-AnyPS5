@@ -97,6 +97,7 @@ std::shared_ptr<DrawDecode> Driver::decodeDraw(const QueueState& queue, const Su
         append(0x008, 1, Stage::Fragment, 0x00b, 0x00c, Role::Fragment);
         programs.back().firstUserSgpr = 0;
         product->pixel = Graphics::DecodePixelStageInfo(queue.context, Graphics::ExportMappings(graphics), nullPixel);
+        product->pixel.targetExportPacking = Graphics::ExportPackings(graphics);
         return product;
     }
 }

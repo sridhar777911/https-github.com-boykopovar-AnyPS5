@@ -38,6 +38,7 @@ struct ColorTarget {
     std::uint8_t componentMapping;
     ColorTileMode tileMode = ColorTileMode::Linear;
     std::uint32_t elementBytes = 4;
+    ShaderRecompiler::ColorExportPacking packing = ShaderRecompiler::ColorExportPacking::None;
     // DCC metadata of a compressed target (CB_COLOR_INFO DCC_ENABLE), or 0 (see DccMetadata.hpp).
     std::uint64_t dccAddress = 0;
     bool dccAlphaOnMsb = false;
@@ -99,6 +100,7 @@ struct State {
 ShaderStages DecodeShaderStages(const QueueState& queue);
 State DecodeState(const QueueState& queue);
 std::array<std::uint8_t, 8> ExportMappings(const State& state);
+std::array<ShaderRecompiler::ColorExportPacking, 8> ExportPackings(const State& state);
 ColorTarget DecodeColorBuffer(const Registers& context, std::uint32_t slot);
 
 struct ColorMetadataPass {

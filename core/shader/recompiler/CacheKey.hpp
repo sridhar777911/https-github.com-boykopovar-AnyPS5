@@ -143,6 +143,7 @@ private:
         append(key, value.conservativeZExport);
         append(key, value.targetOutputMode);
         append(key, value.targetExportMapping);
+        append(key, value.targetExportPacking);
     }
 
     static void append(std::vector<std::uint64_t>& key, const ShaderVertexResourceDestination& value) {
