@@ -25,12 +25,21 @@ enum class Ngs2PlayState : std::uint32_t {
     Stopped = SCE_NGS2_VOICE_STATE_FLAG_INUSE | SCE_NGS2_VOICE_STATE_FLAG_PLAYING | SCE_NGS2_VOICE_STATE_FLAG_STOPPED,
 };
 
+struct Ngs2Piece {
+    const std::uint8_t* data;
+    std::uint64_t firstFrame;
+    std::uint64_t frames;
+};
+
 struct Ngs2Block {
     const std::uint8_t* data;
     Ngs2WaveformBlock info;
     std::uint32_t cursor = 0;
     std::uint32_t numRepeated = 0;
     std::size_t dataCursor = 0;
+    bool streaming = false;
+    std::uint64_t availableFrames = 0;
+    std::vector<Ngs2Piece> pieces;
 };
 
 struct Ngs2Atrac9DecoderDeleter {
@@ -143,6 +152,7 @@ struct Ngs2System {
 };
 
 std::string Ngs2Hex(std::uint32_t value);
+const std::uint8_t* Ngs2StreamEnd(const Ngs2Voice& voice, const Ngs2Block& block);
 std::recursive_mutex& Ngs2Mutex();
 Ngs2System* Ngs2FindSystem(Ngs2Handle handle);
 
