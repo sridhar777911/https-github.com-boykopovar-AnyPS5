@@ -1,5 +1,6 @@
 #include "../include/Pthread.hpp"
 #include "../include/ThreadLifecycle.hpp"
+#include "../include/Cancel.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
 #include "prx/libc/include/CpuTopology.hpp"
@@ -44,6 +45,18 @@ static std::atomic<get_thread_atexit_count_func_t> threadAtexitCount{nullptr};
 static std::atomic<thread_atexit_report_func_t> threadAtexitReport{nullptr};
 static thread_local PthreadPrivate* currentThread = nullptr;
 static thread_local bool threadFinishing = false;
+static thread_local bool threadExiting = false;
+static thread_local int cancelState = GUEST_CANCEL_ENABLE;
+static thread_local int cancelType = GUEST_CANCEL_DEFERRED;
+
+struct CleanupHandler {
+    CleanupHandler* previous;
+    void (APS5_VABI* routine)(void*);
+    void* argument;
+    int onHeap;
+};
+
+static thread_local CleanupHandler* cleanupHandlers = nullptr;
 static std::mutex stackLock;
 static std::map<PthreadPrivate*, std::pair<std::uintptr_t, std::uintptr_t>> liveStacks;
 
@@ -166,7 +179,25 @@ static void finishThread(PthreadPrivate* self, void* retval) {
         self->_retval = retval;
         self->_finished.store(true, std::memory_order_release);
     }
-    self->_join_cv.notify_all();
+    self->_join_cv.NotifyAll();
+}
+
+bool ThreadCancel::Requested() {
+    return currentThread && !threadExiting && cancelState == GUEST_CANCEL_ENABLE && currentThread->cancelPending.load();
+}
+
+void ThreadCancel::Check() {
+    if (Requested()) scePthreadExit(GUEST_CANCELED);
+}
+
+void ThreadCancel::BeginWait(TimedWait::Condition* condition) {
+    if (!currentThread) return;
+    std::lock_guard lock(currentThread->cancelLock);
+    currentThread->cancelWait = condition;
+}
+
+void ThreadCancel::EndWait() {
+    BeginWait(nullptr);
 }
 
 static void RunThread(std::unique_ptr<ThreadArgs> args) {
@@ -354,6 +385,11 @@ int APS5_VABI scePthreadJoin(Pthread thread, void** retval) {
     if (thread->_detached) return SCE_KERNEL_ERROR_EINVAL;
     if (thread == currentThread)
         throw std::runtime_error("scePthreadJoin: cannot join current thread");
+    ThreadCancel::Check();
+    {
+        std::unique_lock lock(thread->_join_mtx);
+        ThreadCancel::WaitUntil(thread->_join_cv, lock, std::nullopt, [&] { return thread->_finished.load(); });
+    }
 #ifdef _WIN32
     if (WaitForSingleObject(thread->nativeHandle, INFINITE) != WAIT_OBJECT_0)
         throw std::system_error(GetLastError(), std::system_category(), "Joining guest thread");
@@ -384,6 +420,8 @@ void APS5_VABI scePthreadExit(void* retval) {
     if (!currentThread)
         throw std::runtime_error("scePthreadExit: current thread is not registered");
     auto* self = currentThread;
+    threadExiting = true;
+    while (cleanupHandlers) __pthread_cleanup_pop_imp_nid_postfix(1);
     finishThread(self, retval);
     currentThread = nullptr;
 #ifdef _WIN32
@@ -430,9 +468,32 @@ void APS5_VABI scePthreadYield() {
 }
 
 int APS5_VABI scePthreadCancel(Pthread thread) {
- (void)thread;
- NotImplemented_nid_no_patch(__func__);
- return 0;
+    if (!thread) return SCE_KERNEL_ERROR_ESRCH;
+    thread->cancelPending.store(true);
+    for (;;) {
+        {
+            std::lock_guard lock(thread->cancelLock);
+            if (!thread->cancelWait) return SCE_OK;
+            thread->cancelWait->NotifyAll();
+        }
+        std::this_thread::yield();
+    }
+}
+
+void APS5_VABI __pthread_cleanup_push_imp_nid_postfix(void (APS5_VABI* routine)(void*), void* argument, void* info) {
+    auto* handler = static_cast<CleanupHandler*>(info);
+    handler->routine = routine;
+    handler->argument = argument;
+    handler->onHeap = 0;
+    handler->previous = cleanupHandlers;
+    cleanupHandlers = handler;
+}
+
+void APS5_VABI __pthread_cleanup_pop_imp_nid_postfix(int execute) {
+    auto* handler = cleanupHandlers;
+    if (!handler) return;
+    cleanupHandlers = handler->previous;
+    if (execute) handler->routine(handler->argument);
 }
 
 int APS5_VABI scePthreadEqual(Pthread thread1, Pthread thread2) {
@@ -491,20 +552,23 @@ int APS5_VABI scePthreadSetaffinity(Pthread thread, KernelCpumask mask) {
 }
 
 int APS5_VABI scePthreadSetcancelstate(int state, int* old_state) {
-    static thread_local int cancelState = 0;
+    if (state != GUEST_CANCEL_ENABLE && state != GUEST_CANCEL_DISABLE) return SCE_KERNEL_ERROR_EINVAL;
     if (old_state) *old_state = cancelState;
     cancelState = state;
+    if (cancelType == GUEST_CANCEL_ASYNCHRONOUS) ThreadCancel::Check();
     return SCE_OK;
 }
 
 int APS5_VABI scePthreadSetcanceltype(int type, int* old_type) {
-    static thread_local int cancelType = 0;
+    if (type != GUEST_CANCEL_DEFERRED && type != GUEST_CANCEL_ASYNCHRONOUS) return SCE_KERNEL_ERROR_EINVAL;
     if (old_type) *old_type = cancelType;
     cancelType = type;
+    if (cancelType == GUEST_CANCEL_ASYNCHRONOUS) ThreadCancel::Check();
     return SCE_OK;
 }
 
 void APS5_VABI scePthreadTestcancel() {
+    ThreadCancel::Check();
 }
 
 int APS5_VABI scePthreadSetprio(Pthread thread, int prio) {

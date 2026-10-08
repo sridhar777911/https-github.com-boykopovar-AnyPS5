@@ -1,6 +1,7 @@
 #include "prx/libkernel/Pthread/include/Pthread.hpp"
 #include "prx/libkernel/Pthread/include/Mutex.hpp"
 #include "prx/libkernel/Pthread/include/Cond.hpp"
+#include "prx/libkernel/Pthread/include/Cancel.hpp"
 #include "prx/libkernel/Pthread/Posix/Common.hpp"
 #include "prx/libkernel/Time/include/Time.hpp"
 #include "prx/libkernel/Time/include/TimedWait.hpp"
@@ -61,19 +62,19 @@ int waitUntil(PthreadCond* cond, PthreadMutex* mutex, std::optional<std::uint64_
         const auto previousCount = m->_count;
         m->_count = 0;
         m->_owner.store(std::thread::id{}, std::memory_order_release);
-        if (deadlineNanos) timedOut = !c->_cv.WaitUntil(lock, *deadlineNanos);
-        else c->_cv.Wait(lock);
+        timedOut = !ThreadCancel::Wait(c->_cv, lock, deadlineNanos);
         m->_owner.store(std::this_thread::get_id(), std::memory_order_release);
         m->_count = previousCount;
         lock.release();
+        ThreadCancel::Check();
         return timedOut ? sceTimedOut : 0;
     }
     std::unique_lock<std::timed_mutex> lock(m->_mtx, std::adopt_lock);
     m->_owner.store(std::thread::id{}, std::memory_order_release);
-    if (deadlineNanos) timedOut = !c->_cv.WaitUntil(lock, *deadlineNanos);
-    else c->_cv.Wait(lock);
+    timedOut = !ThreadCancel::Wait(c->_cv, lock, deadlineNanos);
     m->_owner.store(std::this_thread::get_id(), std::memory_order_release);
     lock.release();
+    ThreadCancel::Check();
     return timedOut ? sceTimedOut : 0;
 }
 
