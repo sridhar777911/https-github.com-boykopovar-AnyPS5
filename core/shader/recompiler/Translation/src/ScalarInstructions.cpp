@@ -417,6 +417,18 @@ bool TranslationContext::emitScalar(const RdnaInstruction& inst) {
         return true;
     case RdnaOpcode::SDenormMode:
         throw std::runtime_error("s_denorm_mode " + std::to_string(inst.source0.value) + " at pc " + std::to_string(inst.programCounter) + ": the recompiler does not model denormal modes");
+    case RdnaOpcode::SSethalt:
+        if ((inst.source0.value & 1u) != 0u) {
+            throw std::runtime_error("s_sethalt " + std::to_string(inst.source0.value) + " at pc " + std::to_string(inst.programCounter) + " halts the wave until a debugger resumes it");
+        }
+        emitControlNop();
+        return true;
+    case RdnaOpcode::SSendmsghalt:
+        throw std::runtime_error("s_sendmsghalt " + std::to_string(inst.source0.value) + " at pc " + std::to_string(inst.programCounter) + " halts the wave until a debugger resumes it");
+    case RdnaOpcode::SCodeEnd:
+        throw std::runtime_error("s_code_end at pc " + std::to_string(inst.programCounter) + " is reached: it marks the end of the code and raises an illegal instruction exception");
+    case RdnaOpcode::SRfeB64:
+        throw std::runtime_error("s_rfe_b64 at pc " + std::to_string(inst.programCounter) + " returns from a trap handler, and recompiled shaders run without one");
     case RdnaOpcode::SWaitcntDepctr:
     case RdnaOpcode::SWaitIdle:
         emitWaitcnt();

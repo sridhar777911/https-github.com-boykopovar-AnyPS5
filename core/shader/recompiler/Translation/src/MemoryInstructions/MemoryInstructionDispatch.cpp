@@ -5,6 +5,22 @@
 
 namespace ShaderRecompiler {
 
+namespace {
+
+const char* globalWaveSyncName(RdnaOpcode opcode) {
+    switch (opcode) {
+    case RdnaOpcode::DsGwsInit: return "ds_gws_init";
+    case RdnaOpcode::DsGwsSemaV: return "ds_gws_sema_v";
+    case RdnaOpcode::DsGwsSemaBr: return "ds_gws_sema_br";
+    case RdnaOpcode::DsGwsSemaP: return "ds_gws_sema_p";
+    case RdnaOpcode::DsGwsSemaReleaseAll: return "ds_gws_sema_release_all";
+    case RdnaOpcode::DsGwsBarrier: return "ds_gws_barrier";
+    default: throw std::logic_error("opcode is not a global wave sync instruction");
+    }
+}
+
+}
+
 void TranslateMemoryInstruction(IrBuilder& builder, const RdnaInstruction& instruction) {
     throw std::runtime_error("TranslateMemoryInstruction not implemented");
 }
@@ -443,6 +459,15 @@ bool TranslationContext::emitMemory(const RdnaInstruction& inst) {
         return dsAppendConsume(inst, IrOpcode::DataConsume);
     case RdnaOpcode::DsAppend:
         return dsAppendConsume(inst, IrOpcode::DataAppend);
+    case RdnaOpcode::DsGwsInit:
+    case RdnaOpcode::DsGwsSemaV:
+    case RdnaOpcode::DsGwsSemaBr:
+    case RdnaOpcode::DsGwsSemaP:
+    case RdnaOpcode::DsGwsSemaReleaseAll:
+    case RdnaOpcode::DsGwsBarrier:
+        throw std::runtime_error(std::string(globalWaveSyncName(inst.op)) + " at pc " + std::to_string(inst.programCounter) + ": global wave sync barriers and semaphores shared by waves of different workgroups are not modeled");
+    case RdnaOpcode::DsOrderedCount:
+        throw std::runtime_error("ds_ordered_count at pc " + std::to_string(inst.programCounter) + ": GDS counters updated in wave launch order are not modeled");
     case RdnaOpcode::DsWriteAddtidB32:
         return dsAddtid(inst, true);
     case RdnaOpcode::DsReadAddtidB32:
