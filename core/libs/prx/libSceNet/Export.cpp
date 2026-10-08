@@ -31,6 +31,7 @@
 #include <string>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libkernel/Socket/include/SocketPoll.hpp"
 
 // Guest socket descriptors retain PS5 semantics while their transport is backed by host sockets.
 
@@ -290,6 +291,65 @@ extern "C" {
 int* APS5_VABI sceNetErrnoLoc(void) {
     return errno_slot();
 }
+
+int PollSockets(KernelSocketPoll::Entry* entries, int count, int timeoutMilliseconds) {
+    std::vector<std::shared_ptr<NativeSocketHandle>> natives(static_cast<std::size_t>(count));
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        for (int index = 0; index < count; ++index) {
+            const auto socket = g_socks.find(entries[index].descriptor);
+            if (socket != g_socks.end()) natives[static_cast<std::size_t>(index)] = socket->second.native;
+        }
+    }
+#ifdef _WIN32
+    std::vector<WSAPOLLFD> descriptors;
+    constexpr short NativeReadable = POLLRDNORM;
+    constexpr short NativeUrgent = POLLRDBAND;
+    constexpr short NativeWritable = POLLWRNORM;
+#else
+    std::vector<pollfd> descriptors;
+    constexpr short NativeReadable = POLLIN;
+    constexpr short NativeUrgent = POLLPRI;
+    constexpr short NativeWritable = POLLOUT;
+#endif
+    std::vector<int> owners;
+    for (int index = 0; index < count; ++index) {
+        auto& entry = entries[index];
+        if (!natives[static_cast<std::size_t>(index)]) {
+            entry.revents = KernelSocketPoll::Unknown;
+            continue;
+        }
+        decltype(descriptors)::value_type descriptor{};
+        descriptor.fd = natives[static_cast<std::size_t>(index)]->value;
+        if (entry.events & KernelSocketPoll::Readable) descriptor.events |= NativeReadable;
+        if (entry.events & KernelSocketPoll::Urgent) descriptor.events |= NativeUrgent;
+        if (entry.events & KernelSocketPoll::Writable) descriptor.events |= NativeWritable;
+        descriptors.push_back(descriptor);
+        owners.push_back(index);
+    }
+    if (descriptors.empty()) return 0;
+#ifdef _WIN32
+    const int result = WSAPoll(descriptors.data(), static_cast<ULONG>(descriptors.size()), timeoutMilliseconds);
+#else
+    const int result = ::poll(descriptors.data(), descriptors.size(), timeoutMilliseconds);
+#endif
+    if (result < 0) return -native_error();
+    int ready = 0;
+    for (std::size_t index = 0; index < descriptors.size(); ++index) {
+        const short native = descriptors[index].revents;
+        short revents = 0;
+        if (native & NativeReadable) revents |= KernelSocketPoll::Readable;
+        if (native & NativeUrgent) revents |= KernelSocketPoll::Urgent;
+        if (native & NativeWritable) revents |= KernelSocketPoll::Writable;
+        if (native & (POLLERR | POLLNVAL)) revents |= KernelSocketPoll::Error;
+        if (native & POLLHUP) revents |= KernelSocketPoll::HangUp;
+        entries[owners[index]].revents = revents;
+        if (revents != 0) ++ready;
+    }
+    return ready;
+}
+
+const bool g_socketPollerRegistered = (KernelSetSocketPoller_nid_no_patch(&PollSockets), true);
 
 int APS5_VABI sceNetInit_nid_postfix(void) {
     std::lock_guard<std::mutex> lk(g_mutex);
