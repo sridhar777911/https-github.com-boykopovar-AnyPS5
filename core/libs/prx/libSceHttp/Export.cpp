@@ -141,6 +141,13 @@ int APS5_VABI sceHttpSetAuthEnabled(int id, int enable) {
     return 0;
 }
 
+int APS5_VABI sceHttpSetAuthInfoCallback(int id, HttpAuthInfoCallback callback, void* userArg) {
+    (void)id;
+    (void)callback;
+    (void)userArg;
+    return 0;
+}
+
 int APS5_VABI sceHttpSetAutoRedirect(int id, int enable) {
     (void)id;
     (void)enable;
