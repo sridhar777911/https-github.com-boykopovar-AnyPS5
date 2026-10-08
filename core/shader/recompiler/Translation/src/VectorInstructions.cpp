@@ -14,6 +14,9 @@ bool roundsProductSeparately(const RdnaInstruction& inst) {
     if (inst.op == RdnaOpcode::VMadF32) {
         return true;
     }
+    if (inst.family != RdnaInstructionFamily::VOP2 && inst.family != RdnaInstructionFamily::VOP3) {
+        return false;
+    }
     const std::uint32_t vop2 = inst.family == RdnaInstructionFamily::VOP3 ? inst.opcodeId - 0x100u : inst.opcodeId;
     return vop2 == 0x1fu || vop2 == 0x20u || vop2 == 0x21u;
 }
