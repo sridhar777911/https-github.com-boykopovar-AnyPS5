@@ -208,7 +208,13 @@ if(BUILD_TESTING)
         ${LIBS_INCLUDE_DIR}
         ${CMAKE_SOURCE_DIR}/core/shader/recompiler
         ${CMAKE_SOURCE_DIR}/core/shader/recompiler/ControlFlow/include)
+    target_link_libraries(agc_shader_float_mode_tests PRIVATE libc)
+    configure_windows_unwind(agc_shader_float_mode_tests)
     add_test(NAME agc_shader_float_mode COMMAND agc_shader_float_mode_tests)
+    if(WIN32)
+        set_tests_properties(agc_shader_float_mode PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
 
     add_test_executable(agc_profile_output_tests tests/ProfileOutput.cpp)
     target_include_directories(agc_profile_output_tests PRIVATE ${LIBS_INCLUDE_DIR})
