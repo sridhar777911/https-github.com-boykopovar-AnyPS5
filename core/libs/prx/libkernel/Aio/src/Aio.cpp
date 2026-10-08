@@ -54,6 +54,23 @@ void SetState(std::int32_t id, std::int32_t state) {
     g_states[id] = state;
 }
 
+#ifdef _WIN32
+std::int64_t NativePositioned(std::int32_t fd, void* buf, std::size_t nbyte, std::int64_t offset, bool write, const char* name) {
+    if (nbyte > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max())) {
+        throw std::runtime_error(std::string(name) + ": nbytes exceeds platform limit");
+    }
+    const std::int64_t position = ::_lseeki64(fd, 0, SEEK_CUR);
+    if (position < 0 || ::_lseeki64(fd, offset, SEEK_SET) < 0) return -1;
+    const int result = write ? ::_write(fd, buf, static_cast<unsigned int>(nbyte)) : ::_read(fd, buf, static_cast<unsigned int>(nbyte));
+    const int error = errno;
+    if (::_lseeki64(fd, position, SEEK_SET) < 0) {
+        throw std::runtime_error(std::string(name) + ": cannot restore the file offset");
+    }
+    errno = error;
+    return result;
+}
+#endif
+
 std::int64_t NativePread(std::int32_t fd, void* buf, std::size_t nbyte, std::int64_t offset) {
     const GuestArena::HostWrite destination(buf, nbyte);
     if (!destination.Open()) {
@@ -61,22 +78,7 @@ std::int64_t NativePread(std::int32_t fd, void* buf, std::size_t nbyte, std::int
         return -1;
     }
 #ifdef _WIN32
-    if (nbyte > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max())) {
-        throw std::runtime_error("sceKernelAioSubmitReadCommands: nbytes exceeds platform limit");
-    }
-    const int duped = ::_dup(fd);
-    if (duped < 0) return -1;
-    if (::_lseeki64(duped, offset, SEEK_SET) < 0) {
-        const int error = errno;
-        ::_close(duped);
-        errno = error;
-        return -1;
-    }
-    const int result = ::_read(duped, buf, static_cast<unsigned int>(nbyte));
-    const int error = errno;
-    ::_close(duped);
-    errno = error;
-    return result;
+    return NativePositioned(fd, buf, nbyte, offset, false, "sceKernelAioSubmitReadCommands");
 #else
     return static_cast<std::int64_t>(::pread(fd, buf, nbyte, static_cast<off_t>(offset)));
 #endif
@@ -84,22 +86,7 @@ std::int64_t NativePread(std::int32_t fd, void* buf, std::size_t nbyte, std::int
 
 std::int64_t NativePwrite(std::int32_t fd, const void* buf, std::size_t nbyte, std::int64_t offset) {
 #ifdef _WIN32
-    if (nbyte > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max())) {
-        throw std::runtime_error("sceKernelAioSubmitWriteCommands: nbytes exceeds platform limit");
-    }
-    const int duped = ::_dup(fd);
-    if (duped < 0) return -1;
-    if (::_lseeki64(duped, offset, SEEK_SET) < 0) {
-        const int error = errno;
-        ::_close(duped);
-        errno = error;
-        return -1;
-    }
-    const int result = ::_write(duped, buf, static_cast<unsigned int>(nbyte));
-    const int error = errno;
-    ::_close(duped);
-    errno = error;
-    return result;
+    return NativePositioned(fd, const_cast<void*>(buf), nbyte, offset, true, "sceKernelAioSubmitWriteCommands");
 #else
     return static_cast<std::int64_t>(::pwrite(fd, buf, nbyte, static_cast<off_t>(offset)));
 #endif
