@@ -39,6 +39,7 @@
 #include <array>
 #include <optional>
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <deque>
 #include <limits>
@@ -197,6 +198,8 @@ struct VulkanDevice::State {
     // graphics stages, and compute workgroups wider than a wave).
     bool descriptorIndexing = false;
     bool imageInt64Atomics = false;
+    bool runtimeDescriptorArray = false;
+    bool partiallyBound = false;
     bool primitiveListRestart = false;
     bool depthClipControl = false;
     bool imageViewMinLod = false;
@@ -949,15 +952,25 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window) : state(std::make_u
         VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &descriptorIndexingFeatures};
         state->InstanceFunction<PFN_vkGetPhysicalDeviceFeatures2>("vkGetPhysicalDeviceFeatures2")(selected, &features);
         state->descriptorIndexing = descriptorIndexingFeatures.shaderSampledImageArrayNonUniformIndexing == VK_TRUE && descriptorIndexingFeatures.shaderStorageImageArrayNonUniformIndexing == VK_TRUE;
+        state->runtimeDescriptorArray = descriptorIndexingFeatures.runtimeDescriptorArray == VK_TRUE;
+        state->partiallyBound = descriptorIndexingFeatures.descriptorBindingPartiallyBound == VK_TRUE;
     }
     descriptorIndexingFeatures = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT};
+    const bool descriptorIndexingExtension = state->descriptorIndexing || state->runtimeDescriptorArray || state->partiallyBound;
     if (state->descriptorIndexing) {
         descriptorIndexingFeatures.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
         descriptorIndexingFeatures.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
-        deviceExtensions.push_back(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
         state->capabilities.push_back(spv::CapabilityShaderNonUniform);
         state->capabilities.push_back(spv::CapabilitySampledImageArrayNonUniformIndexing);
         state->capabilities.push_back(spv::CapabilityStorageImageArrayNonUniformIndexing);
+    }
+    if (state->runtimeDescriptorArray) {
+        descriptorIndexingFeatures.runtimeDescriptorArray = VK_TRUE;
+        state->capabilities.push_back(spv::CapabilityRuntimeDescriptorArray);
+    }
+    if (state->partiallyBound) descriptorIndexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
+    if (descriptorIndexingExtension) {
+        deviceExtensions.push_back(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
         state->spirvExtensions.push_back("SPV_EXT_descriptor_indexing");
     }
     state->samplerAnisotropy = true;
@@ -1007,7 +1020,7 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window) : state(std::make_u
         imageRobustnessFeatures.pNext = byteFeatures.pNext;
         byteFeatures.pNext = &imageRobustnessFeatures;
     }
-    if (state->descriptorIndexing) {
+    if (descriptorIndexingExtension) {
         descriptorIndexingFeatures.pNext = byteFeatures.pNext;
         byteFeatures.pNext = &descriptorIndexingFeatures;
     }
@@ -2472,6 +2485,8 @@ Graphics::Context VulkanDevice::buildContext() const {
     context.functions = state->functionsReady ? &state->deviceFunctions : nullptr;
     context.descriptorIndexing = state->descriptorIndexing;
     context.imageInt64Atomics = state->imageInt64Atomics;
+    context.runtimeDescriptorArray = state->runtimeDescriptorArray;
+    context.partiallyBound = state->partiallyBound;
     context.geometryShader = state->geometryShader;
     context.sampleRateShading = state->sampleRateShading;
     context.primitiveListRestart = state->primitiveListRestart;
@@ -2520,6 +2535,16 @@ bool ResourceCacheEnabled() {
 bool TemplateDataRefresh() {
     static const bool enabled = std::getenv("APS5_NO_TEMPLATE_DATA_REFRESH") == nullptr;
     return enabled;
+}
+
+std::uint64_t ComputePipelineKey(const ShaderRecompiler::RecompileResult& shader, bool pushes) {
+    if (shader.variantId == 0) return 0;
+    std::uint64_t buckets = 0;
+    for (const auto& binding : shader.bindings) {
+        if (binding.role == ShaderRecompiler::DescriptorRole::ImageTable) buckets |= static_cast<std::uint64_t>(std::bit_width(binding.count));
+        if (binding.role == ShaderRecompiler::DescriptorRole::SamplerTable) buckets |= static_cast<std::uint64_t>(std::bit_width(binding.count)) << 4u;
+    }
+    return (shader.variantId << 9u) | (buckets << 1u) | (pushes ? 1u : 0u);
 }
 
 // The content key of a compute stage, naming the device: the cache is process-wide and the driver
@@ -3316,9 +3341,10 @@ VulkanDevice::IndirectOutcome VulkanDevice::dispatch(const ShaderRecompiler::Rec
     if (arguments == 0 && (x > limit[0] || y > limit[1] || z > limit[2])) {
         throw std::runtime_error("Vulkan dispatch: workgroup count exceeds device limits");
     }
-    // Pipelines are shared by dispatches of one compiled variant; descriptor set layouts built from the
-    // same bindings are compatible, so the pipeline layout of the first dispatch serves them all.
-    const std::uint64_t pipelineKey = shader.variantId != 0 ? (shader.variantId << 1u) | (pushStages != 0 ? 1u : 0u) : 0u;
+    // Pipelines are shared by dispatches of one compiled variant and image table size class;
+    // descriptor set layouts built from the same bindings are compatible, so the pipeline layout of
+    // the first such dispatch serves them all.
+    const std::uint64_t pipelineKey = ComputePipelineKey(shader, pushStages != 0);
     std::shared_ptr<ComputePipelineObjects> objects;
     if (pipelineKey != 0) {
         std::lock_guard pipelines(state->computePipelinesMutex);
@@ -3632,7 +3658,7 @@ RecipeOutcome VulkanDevice::DispatchRecipe(const ShaderRecompiler::RecompileResu
             return RecipeOutcome::Rebuild;
         }
         std::shared_ptr<ComputePipelineObjects> mapped;
-        const auto pipelineKey = (shader.variantId << 1u) | (recipe.pushes ? 1u : 0u);
+        const auto pipelineKey = ComputePipelineKey(shader, recipe.pushes);
         {
             std::lock_guard pipelines(state->computePipelinesMutex);
             if (const auto found = state->computePipelines.find(pipelineKey); found != state->computePipelines.end()) mapped = found->second;

@@ -8,6 +8,7 @@
 #include "IntermediateRepresentation/IrMetadata/ResourceInfo.hpp"
 #include "IntermediateRepresentation/IrMetadata/ShaderInfo.hpp"
 #include "IntermediateRepresentation/IrMetadata/ShaderStage.hpp"
+#include "ImageTableAbi.hpp"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -34,6 +35,50 @@ struct UniformFill {
     bool operator==(const UniformFill& other) const = default;
 };
 
+struct ImageTableImage {
+    DescriptorValue words;
+    RdnaImageDimension dimension = RdnaImageDimension::Unknown;
+    IrTextureNumericClass numericClass = IrTextureNumericClass::Unsupported;
+    bool depthCompare = false;
+
+    bool operator==(const ImageTableImage& other) const = default;
+};
+
+struct ImageTableSampler {
+    DescriptorValue words;
+    bool compare = false;
+    bool point = false;
+
+    bool operator==(const ImageTableSampler& other) const = default;
+};
+
+struct ImageTablePoison {
+    std::uint64_t address = 0;
+    DescriptorValue words;
+    std::uint32_t view = 0;
+    ImageTableAbi::PoisonReason reason = ImageTableAbi::PoisonReason::OutsideSnapshot;
+
+    bool operator==(const ImageTablePoison& other) const = default;
+};
+
+struct ImageTableRange {
+    std::uint64_t base = 0;
+    std::uint64_t size = 0;
+
+    bool operator==(const ImageTableRange& other) const = default;
+};
+
+struct ImageTableSnapshot {
+    std::vector<ImageTableImage> images;
+    std::vector<ImageTableSampler> samplers;
+    std::vector<ImageTablePoison> poison;
+    std::vector<std::uint32_t> map;
+    std::vector<ImageTableRange> ranges;
+    std::uint64_t shader = 0;
+
+    bool operator==(const ImageTableSnapshot& other) const = default;
+};
+
 struct ResourceSnapshot {
     std::vector<DescriptorValue> buffers;
     std::vector<DescriptorValue> images;
@@ -41,6 +86,7 @@ struct ResourceSnapshot {
     std::vector<std::uint32_t> flattenedSrt;
     std::vector<std::uint32_t> userData;
     UniformFill uniformFill;
+    ImageTableSnapshot tables;
 };
 
 struct UniformFillPlan {

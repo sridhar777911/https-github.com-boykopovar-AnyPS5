@@ -21,6 +21,9 @@ enum class DescriptorBindingKind : std::uint32_t {
     FaultBuffer,
     FlattenedSrt,
     ShaderData,
+    ImageTable,
+    SamplerTable,
+    ImageTableMap,
     Count,
 };
 
