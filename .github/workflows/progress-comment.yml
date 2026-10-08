@@ -24,19 +24,62 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          set -e
+          created=0 updated=0 deleted=0 unchanged=0 skipped=0 clean=0
           pr=$(cat pr)
-          [[ $pr =~ ^[0-9]+$ ]] || exit 1
-          [ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" = "$RUN_SHA" ] || exit 0
-          marker='<!-- progress-report -->'
-          id=$(gh api "repos/$GH_REPO/issues/$pr/comments" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | head -n1)
-          if [ -f report.md ]; then
-            printf '%s\n%s' "$marker" "$(cat report.md)" > body.md
-            if [ -n "$id" ]; then
-              gh api -X PATCH "repos/$GH_REPO/issues/comments/$id" -F body=@body.md > /dev/null
+          if ! [[ $pr =~ ^[0-9]+$ ]]; then
+            echo "progress comment sync: invalid pr artifact: $pr"
+            exit 1
+          fi
+          head_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+          if [ "$head_sha" != "$RUN_SHA" ]; then
+            skipped=1
+            echo "progress comment sync: skipped stale run on PR #$pr (head ${head_sha:0:7}, workflow ${RUN_SHA:0:7})"
+          else
+            marker='<!-- progress-report -->'
+            comment=$(gh api "repos/$GH_REPO/issues/$pr/comments" --paginate \
+              --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | [.id, .body] | @json" | head -n1 || true)
+            id=$(jq -r '.[0] // empty' <<< "${comment:-null}")
+            if [ -f report.md ]; then
+              printf '%s\n%s' "$marker" "$(cat report.md)" > body.md
+              if [ -n "$id" ]; then
+                if [ "$(jq -r '.[1]' <<< "${comment:-null}")" = "$(cat body.md)" ]; then
+                  unchanged=1
+                  echo "progress comment sync: unchanged comment on PR #$pr"
+                else
+                  gh api -X PATCH "repos/$GH_REPO/issues/comments/$id" -F body=@body.md > /dev/null
+                  updated=1
+                  echo "progress comment sync: updated comment on PR #$pr"
+                fi
+              else
+                gh pr comment "$pr" --body-file body.md
+                created=1
+                echo "progress comment sync: created comment on PR #$pr"
+              fi
+            elif [ -n "$id" ]; then
+              gh api -X DELETE "repos/$GH_REPO/issues/comments/$id" > /dev/null
+              deleted=1
+              echo "progress comment sync: deleted stale comment on PR #$pr"
             else
-              gh pr comment "$pr" --body-file body.md
+              clean=1
+              echo "progress comment sync: clean on PR #$pr (no report, no comment)"
             fi
-          elif [ -n "$id" ]; then
-            gh api -X DELETE "repos/$GH_REPO/issues/comments/$id"
+          fi
+          echo "progress comment sync: created=$created updated=$updated deleted=$deleted unchanged=$unchanged skipped=$skipped clean=$clean"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "## Progress comment"
+              echo ""
+              echo "- **Repo:** \`$GH_REPO\`"
+              echo "- **PR:** #$pr"
+              echo ""
+              echo "| Sync | Count |"
+              echo "|---|---:|"
+              echo "| Created | $created |"
+              echo "| Updated | $updated |"
+              echo "| Deleted | $deleted |"
+              echo "| Unchanged | $unchanged |"
+              echo "| Skipped (stale run) | $skipped |"
+              echo "| Clean (no report, no comment) | $clean |"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
