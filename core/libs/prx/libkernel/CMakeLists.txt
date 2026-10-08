@@ -84,6 +84,16 @@ if(BUILD_TESTING)
         set_tests_properties(guest_posix_sem_init guest_posix_sem_post PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libkernel>")
     endif()
+    add_test_executable(guest_process_time_tests ${LIBS_INCLUDE_DIR}/tests/GuestProcessTime.cpp)
+    target_include_directories(guest_process_time_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(guest_process_time_tests PRIVATE libkernel libc)
+    configure_windows_unwind(guest_process_time_tests)
+    add_test(NAME guest_process_time COMMAND guest_process_time_tests)
+    add_test(NAME guest_process_time_counter COMMAND guest_process_time_tests counter)
+    if(WIN32)
+        set_tests_properties(guest_process_time guest_process_time_counter PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libkernel>")
+    endif()
     add_library(guest_module_fixture SHARED ${LIBS_INCLUDE_DIR}/tests/GuestModuleFixture.cpp)
     target_include_directories(guest_module_fixture PRIVATE ${LIBS_INCLUDE_DIR})
     add_custom_command(TARGET guest_module_fixture POST_BUILD
