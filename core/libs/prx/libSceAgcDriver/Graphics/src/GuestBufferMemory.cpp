@@ -525,6 +525,8 @@ struct ImageMirrors {
     std::uint64_t builds = 0;
     std::uint64_t heapRefills = 0;
     std::uint64_t heapUnwatched = 0;
+    std::uint64_t heapImported = 0;
+    std::uint64_t heapImportedBytes = 0;
     std::uint64_t subranges = 0;
     std::uint64_t rebuilds = 0;
     std::uint64_t refreshes = 0;
@@ -894,6 +896,23 @@ void sweepMirrors() {
     }
 }
 
+void releaseImportedMirrors(const Context& context, const std::vector<std::uint64_t>& imported) {
+    if (imported.empty()) return;
+    std::vector<std::shared_ptr<ImageMirror>> released;
+    auto& state = Mirrors();
+    std::lock_guard lock(state.mutex);
+    if (state.device != context.device || state.entries.empty()) return;
+    for (const auto base : imported) {
+        const auto found = state.entries.find(base);
+        if (found == state.entries.end() || !found->second->heap) continue;
+        state.heapBytes -= found->second->bytes;
+        ++state.heapImported;
+        state.heapImportedBytes += found->second->bytes;
+        released.push_back(std::move(found->second));
+        state.entries.erase(found);
+    }
+}
+
 void reportMirrors() {
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
     if (!profile) return;
@@ -916,7 +935,7 @@ void reportMirrors() {
         }
         heapBytes = state.heapBytes;
     }
-    AgcDriver::ProfilePrint_nid_no_patch("[buffers] image mirrors: %zu ranges (%.1f MiB, %zu writable, %zu heap %.1f MiB), %llu address-based builds served, %llu descriptor sub-ranges bound, %llu rebuilds, %llu refreshes: %llu blocks compared, %llu copied, %llu refresh syncs; heap refills %llu, unwatched heaps %llu\n", count, bytes / 1048576.0, writable, heaps, heapBytes / 1048576.0, static_cast<unsigned long long>(state.builds), static_cast<unsigned long long>(state.subranges), static_cast<unsigned long long>(state.rebuilds), static_cast<unsigned long long>(state.refreshes), static_cast<unsigned long long>(state.blocksCompared), static_cast<unsigned long long>(state.blocksCopied), static_cast<unsigned long long>(state.syncs), static_cast<unsigned long long>(state.heapRefills), static_cast<unsigned long long>(state.heapUnwatched));
+    AgcDriver::ProfilePrint_nid_no_patch("[buffers] image mirrors: %zu ranges (%.1f MiB, %zu writable, %zu heap %.1f MiB), %llu address-based builds served, %llu descriptor sub-ranges bound, %llu rebuilds, %llu refreshes: %llu blocks compared, %llu copied, %llu refresh syncs; heap refills %llu, unwatched heaps %llu, %llu heap mirrors released for imports (%.1f MiB)\n", count, bytes / 1048576.0, writable, heaps, heapBytes / 1048576.0, static_cast<unsigned long long>(state.builds), static_cast<unsigned long long>(state.subranges), static_cast<unsigned long long>(state.rebuilds), static_cast<unsigned long long>(state.refreshes), static_cast<unsigned long long>(state.blocksCompared), static_cast<unsigned long long>(state.blocksCopied), static_cast<unsigned long long>(state.syncs), static_cast<unsigned long long>(state.heapRefills), static_cast<unsigned long long>(state.heapUnwatched), static_cast<unsigned long long>(state.heapImported), state.heapImportedBytes / 1048576.0);
 }
 
 // Deferred lease release. The lease an address-based build takes (AcquireRegistered) is dropped by its
@@ -1420,6 +1439,7 @@ void GuestBufferMemory::AcquireRegistered() {
         // must not happen under it.
         regions.reserve(lease.size());
         std::vector<AddressCopy> copies;
+        std::vector<std::uint64_t> imported;
         for (const auto& range : lease) {
             if (!range->readable) continue;
             validate(range->address, range->bytes);
@@ -1436,6 +1456,7 @@ void GuestBufferMemory::AcquireRegistered() {
                 // Reused by Upload while no import was dropped since (see importsEpoch).
                 region.direct = entry;
                 regions.push_back(std::move(region));
+                imported.push_back(range->address);
                 continue;
             }
             if (mirrorsEnabled()) {
@@ -1458,6 +1479,7 @@ void GuestBufferMemory::AcquireRegistered() {
             const char* reason = !mirrorsEnabled() ? "mirrors disabled by APS5_NO_LEASE_MIRROR" : copied.sparse ? "unreadable pages" : !range->releasable ? "image mirror refused" : "outside the write-watched arena";
             copies.push_back({copied.begin, copied.end, committed, reason});
         }
+        releaseImportedMirrors(context, imported);
         regionsSorted = sortedLookup;
         static const std::uint64_t copyLimit = [] {
             const char* value = std::getenv("APS5_ADDRESS_COPY_MAX_MIB");
