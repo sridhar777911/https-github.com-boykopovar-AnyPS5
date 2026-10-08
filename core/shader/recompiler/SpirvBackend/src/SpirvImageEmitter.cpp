@@ -190,17 +190,19 @@ std::uint32_t CoordF32(SpirvValueEmitContext& ctx, const ImageEmitAccess& access
 
 std::uint32_t CoordU32(SpirvValueEmitContext& ctx, const ImageEmitAccess& access) {
     const auto components = RdnaImageDimensionInfoFor(access.image.dimension).coordinateComponents;
-    if (AddressDimension(access).coordinateComponents < components || access.mem.imageAddressComponents < components) {
+    const auto encoded = std::min(components, AddressDimension(access).coordinateComponents);
+    if (access.mem.imageAddressComponents < encoded) {
         ctx.Fail(access.inst, "has an image address with too few coordinate components");
     }
-    const auto x = AddressU32(ctx, access, 0);
+    const auto component = [&](std::uint32_t index) { return index < encoded ? AddressU32(ctx, access, index) : ConstantU32(ctx.state, 0); };
+    const auto x = component(0);
     if (components == 1u) {
         return x;
     }
-    const auto y = AddressU32(ctx, access, 1);
+    const auto y = component(1);
     const auto result = ctx.state.module.AllocateId();
     if (components == 3u) {
-        const auto z = AddressU32(ctx, access, 2);
+        const auto z = component(2);
         ctx.state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(ctx.state, 3), result, x, y, z);
     } else {
         ctx.state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(ctx.state, 2), result, x, y);
