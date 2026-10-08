@@ -6,6 +6,7 @@
 #include "prx/libSceAgcDriver/Graphics/include/Draw.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/ShaderInputState.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DccMetadata.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/Texture.hpp"
 #include "ControlFlow/RequestSerializer.hpp"
 #include "CacheKey.hpp"
 #include <spirv/unified1/spirv.hpp>
@@ -219,6 +220,53 @@ void stateTests() {
     const auto unset = AgcDriver::Graphics::DecodePixelStageInfo(queue.context, AgcDriver::Graphics::ExportMappings(state), true);
     Require(unset.inputAddr == ShaderRecompiler::PixelInputBit(ShaderRecompiler::PixelInput::PerspectiveCenter), "unset pixel inputs of the null program did not read as PERSP_CENTER_ENA");
     for (const auto mode : unset.targetOutputMode) Require(mode == 0, "an unset SPI_SHADER_COL_FORMAT exported a color");
+}
+
+VkFormatFeatureFlags srgb8Features = 0;
+
+void srgb8FormatProperties(VkPhysicalDevice, VkFormat format, VkFormatProperties* properties) {
+    *properties = {};
+    if (format == VK_FORMAT_R8_SRGB) properties->optimalTilingFeatures = srgb8Features;
+}
+
+void setProxyVariable(const char* value) {
+#ifdef _WIN32
+    _putenv_s("APS5_SRGB_ATTACHMENT_PROXY", value);
+#else
+    if (*value == 0) unsetenv("APS5_SRGB_ATTACHMENT_PROXY");
+    else setenv("APS5_SRGB_ATTACHMENT_PROXY", value, 1);
+#endif
+}
+
+void srgb8TargetTests() {
+    setProxyVariable("");
+    auto queue = makeState();
+    queue.context[0x31c] = 0x8604;
+    const auto color = AgcDriver::Graphics::DecodeState(queue).color;
+    Require(color.format == VK_FORMAT_R8_SRGB && color.elementBytes == 1 && color.componentMapping == 0xe4u, "the 8_SRGB color target did not decode as R8_SRGB");
+    for (std::uint32_t swap = 1; swap < 4; ++swap) {
+        queue.context[0x31c] = 0x8604 | (swap << 11u);
+        expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "unsupported color format 1 number type 6 component swap " + std::to_string(swap));
+    }
+    queue.context[0x31c] = 0x860c;
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "unsupported color format 3 number type 6 component swap 0");
+    AgcDriver::Graphics::Context context{};
+    context.formatProperties = srgb8FormatProperties;
+    const auto proxyOn = [&](std::uintptr_t device, VkFormatFeatureFlags features, VkFormat format = VK_FORMAT_R8_SRGB) {
+        srgb8Features = features;
+        context.physical = reinterpret_cast<VkPhysicalDevice>(device);
+        return AgcDriver::Graphics::AttachmentProxyFormat(context, format);
+    };
+    constexpr VkFormatFeatureFlags attachment = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+    constexpr VkFormatFeatureFlags blend = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT;
+    Require(proxyOn(0x1000, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == VK_FORMAT_R8G8B8A8_SRGB, "a device without R8_SRGB attachments must render 8_SRGB through RGBA8_SRGB");
+    Require(proxyOn(0x2000, attachment) == VK_FORMAT_R8G8B8A8_SRGB, "a device without R8_SRGB blending must render 8_SRGB through RGBA8_SRGB");
+    Require(proxyOn(0x3000, attachment | blend) == VK_FORMAT_UNDEFINED, "a device with R8_SRGB attachments must render 8_SRGB directly");
+    Require(proxyOn(0x3000, 0) == VK_FORMAT_UNDEFINED, "the attachment proxy decision is not kept per device");
+    Require(proxyOn(0x4000, 0, VK_FORMAT_R8_UNORM) == VK_FORMAT_UNDEFINED && proxyOn(0x4000, 0, VK_FORMAT_R8G8_SRGB) == VK_FORMAT_UNDEFINED, "only 8_SRGB targets may render through a proxy");
+    setProxyVariable("1");
+    Require(proxyOn(0x5000, attachment | blend) == VK_FORMAT_R8G8B8A8_SRGB, "APS5_SRGB_ATTACHMENT_PROXY=1 did not force the proxy");
+    setProxyVariable("");
 }
 
 void hardwareScreenOffsetTests() {
@@ -2139,6 +2187,7 @@ int main() {
         }
         stateTests();
         hardwareScreenOffsetTests();
+        srgb8TargetTests();
         DepthClipTests();
         DepthStencilTests();
         ZExportTests();

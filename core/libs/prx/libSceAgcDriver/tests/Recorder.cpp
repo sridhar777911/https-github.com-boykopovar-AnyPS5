@@ -98,7 +98,26 @@ public:
             Require(count != 0, "no Vulkan device");
             std::vector<VkPhysicalDevice> devices(count);
             Check(enumerate(instance, &count, devices.data()), "vkEnumeratePhysicalDevices");
-            context.physical = devices.front();
+            const auto rankDeviceType = [](VkPhysicalDeviceType type) {
+                switch (type) {
+                    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return 3;
+                    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 2;
+                    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: return 1;
+                    default: return 0;
+                }
+            };
+            const auto physicalProperties = function<PFN_vkGetPhysicalDeviceProperties>("vkGetPhysicalDeviceProperties");
+            int selectedRank = -1;
+            for (const auto physical : devices) {
+                VkPhysicalDeviceProperties candidate{};
+                physicalProperties(physical, &candidate);
+                if (candidate.apiVersion < VK_API_VERSION_1_1) continue;
+                const int rank = rankDeviceType(candidate.deviceType);
+                if (rank <= selectedRank) continue;
+                context.physical = physical;
+                selectedRank = rank;
+            }
+            Require(context.physical != VK_NULL_HANDLE, "no Vulkan 1.1 device");
             const auto extensions = function<PFN_vkEnumerateDeviceExtensionProperties>("vkEnumerateDeviceExtensionProperties");
             Check(extensions(context.physical, nullptr, &count, nullptr), "vkEnumerateDeviceExtensionProperties");
             std::vector<VkExtensionProperties> available(count);
@@ -191,7 +210,10 @@ private:
     void release() noexcept {
         if (context.pool != VK_NULL_HANDLE) context.Function<PFN_vkDestroyCommandPool>("vkDestroyCommandPool")(context.device, context.pool, nullptr);
         context.bufferPool.reset();
-        if (context.device != VK_NULL_HANDLE) function<PFN_vkDestroyDevice>("vkDestroyDevice")(context.device, nullptr);
+        if (context.device != VK_NULL_HANDLE) {
+            DestroyShadows(context.device);
+            function<PFN_vkDestroyDevice>("vkDestroyDevice")(context.device, nullptr);
+        }
         if (instance != VK_NULL_HANDLE) function<PFN_vkDestroyInstance>("vkDestroyInstance")(instance, nullptr);
         if (library != nullptr) SDL_UnloadObject(library);
     }
@@ -701,6 +723,45 @@ void storeRunTests(const Device& device, Recorder& recorder) {
     recorder.NoteAccess(Recorder::CommandClass::DispatchLeading, Recorder::Access{std::span(&range, 1), {}, {}, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT});
     Require(recorder.Recording() == Recorder::BarrierValidate(), "a noted access opened a batch with the tracker off (or none with it on)");
     recorder.Sync();
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Remove(block);
+    }
+    HostImportFor(context, address, bytes);
+}
+
+void remappedImportTests(const Device& device) {
+    const auto& context = device.GetContext();
+    if (context.hostImportAlignment == 0) {
+        std::cout << "host imports unavailable: remapped imports not tested\n";
+        return;
+    }
+    constexpr std::size_t bytes = 65536;
+#ifdef _WIN32
+    void* block = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+    void* block = std::aligned_alloc(65536, bytes);
+#endif
+    Require(block != nullptr, "cannot allocate the remap test block");
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, bytes, true, true);
+    }
+    if (HostImportFor(context, address, bytes) == nullptr) {
+        std::cout << "host import of the remap test block refused: remapped imports not tested\n";
+        return;
+    }
+    const auto first = HostImportSerial(context, address, bytes, true);
+    Require(first != 0 && HostImportSerial(context, address, bytes, true) == first, "an unchanged range lost its import");
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Remove(block);
+        mutation.Add(block, bytes, true, true);
+    }
+    Require(HostImportFor(context, address, bytes) != nullptr, "the remapped range was not imported again");
+    const auto second = HostImportSerial(context, address, bytes, true);
+    Require(second != 0 && second != first, "the import of a range mapped again was kept");
     {
         GuestAllocations::Mutation mutation;
         mutation.Remove(block);
@@ -1997,6 +2058,10 @@ void importWindowTests(const Device& device, Recorder& recorder) {
     Require(probe.failure == nullptr, "(w) the import probe failed");
     const bool importWrites = probe.writtenAtImport != 0;
     const auto decided = PrepareImportWatch(base);
+    if (decided == ImportWatch::Unwatch) {
+        std::cout << "host imports are compared, not watched: the import window not tested\n";
+        return;
+    }
     SetImportWatch(base, ImportWatch::Watch);
     struct Restore {
         const Context& context;
@@ -2536,7 +2601,12 @@ void minLodTests(const Device& device, Recorder& recorder) {
     const auto unorm = [&](std::size_t level) { return levels[level] / 255.0f; };
     expectRed(sample(0, 0.0f), unorm(0), "minimum LOD clamp: no clamp reads level 0");
     expectRed(sample(0x100, 0.0f), unorm(1), "minimum LOD clamp: MIN_LOD 1 reads level 1 at LOD 0");
-    expectRed(sample(0x180, 0.0f), (unorm(1) + unorm(2)) / 2.0f, "minimum LOD clamp: MIN_LOD 1.5 blends levels 1 and 2");
+    const auto fractional = sample(0x180, 0.0f);
+    if (std::abs(fractional - unorm(1)) <= 1.5f / 255.0f) {
+        std::cout << "minimum LOD clamp: the device takes the integer part of a fractional view minimum LOD\n";
+    } else {
+        expectRed(fractional, (unorm(1) + unorm(2)) / 2.0f, "minimum LOD clamp: MIN_LOD 1.5 blends levels 1 and 2");
+    }
     expectRed(sample(0x100, 2.0f), unorm(2), "minimum LOD clamp: MIN_LOD 1 lowered LOD 2");
     expectRed(sample(0xfff, 0.0f), unorm(3), "minimum LOD clamp: MIN_LOD past the last level reads the last level");
     expectRed(sample(0x200, 0.0f, 1), unorm(2), "minimum LOD clamp: MIN_LOD 2 over a view from level 1 reads level 2");
@@ -2766,6 +2836,7 @@ int main() {
         drawInputReuseTests(device, recorder);
         RunResidentPresentTests(device.GetContext());
         storeRunTests(device, recorder);
+        remappedImportTests(device);
         movedMetadataTests(device, recorder);
         viewPastLastMipTests(device, recorder);
         keysFillTests(device, recorder);

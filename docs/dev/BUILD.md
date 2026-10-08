@@ -7,9 +7,9 @@ git submodule update --init --recursive
 ## Requirements
 
 - x86-64, Git, CMake 3.22.1 or newer, Ninja, C++20.
-- Linux: GCC, G++, binutils.
+- Linux: GCC, G++, binutils. SDL's X11 backend requires X11 and Xext development headers (`libx11-dev` and `libxext-dev` on Debian/Ubuntu).
 - Windows: only MinGW-w64 GCC 15.2.0 (WinLibs `x86_64-ucrt-posix-seh`, release `15.2.0posix-14.0.0-ucrt-r7`) is currently supported. Add its `mingw64/bin` directory to `PATH` before configuring.
-- FFmpeg binaries are downloaded during configuration unless `FFMPEG_PREBUILT_DIR` is set.
+- FFmpeg binaries are downloaded during configuration unless `FFMPEG_PREBUILT_DIR` is set. With the WinLibs CMake, the download fails with status 60 (`SSL peer certificate or SSH remote key was not OK`) unless `SSL_CERT_FILE` names a CA bundle, for example `C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt` from Git for Windows, as in CI.
 
 ## Commands
 
@@ -18,6 +18,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -
 cmake --build build --parallel
 cmake --build build --target libs --parallel
 ```
+
+`libs` is a custom target: every library under [core/libs/prx](../../core/libs/prx) is built with
+`EXCLUDE_FROM_ALL`, so the first command alone does not produce them. Titles load the patched `.prx`
+files from `build/core/libs/libs`, which only that second step refreshes. Running a title after a
+library change without it therefore tests the previous binaries and can show no effect at all.
 
 [Relinker usage and runtime layout](../user/USAGE.md).
 

@@ -20,6 +20,7 @@ struct Pair {
     Value value;
 };
 using NullAccessCallback = const Value& (APS5_VABI*)(std::int32_t, const Value*, void*);
+using SetNullAccessCallback = int (APS5_VABI*)(void*, NullAccessCallback, void*);
 
 extern "C" {
 int APS5_VABI _ZN3sce4Json11InitializerC1Ev(void*);
@@ -27,6 +28,7 @@ int APS5_VABI _ZN3sce4Json11InitializerD1Ev(void*);
 int APS5_VABI _ZN3sce4Json11Initializer10initializeEPKNS0_13InitParameterE(void*, const void*);
 int APS5_VABI _ZN3sce4Json11Initializer9terminateEv(void*);
 int APS5_VABI _ZN3sce4Json11Initializer27setGlobalNullAccessCallBackEPFRKNS0_5ValueENS0_9ValueTypeEPS3_PvES7_(void*, NullAccessCallback, void*);
+int APS5_VABI _ZN3sce4Json11Initializer27setGlobalNullAccessCallbackEPFRKNS0_5ValueENS0_9ValueTypeEPS3_PvES7_(void*, NullAccessCallback, void*);
 void APS5_VABI _ZN3sce4Json6StringC1Ev(String*);
 void APS5_VABI _ZN3sce4Json6StringC1EPKc(String*, const char*);
 void APS5_VABI _ZN3sce4Json6StringD1Ev(String*);
@@ -265,13 +267,17 @@ static void ObjectsAndArrays() {
     _ZN3sce4Json5ArrayD1Ev(&array);
 }
 
-static void NullAccess() {
+static void NullAccess(SetNullAccessCallback setCallback) {
+    callbackCalls = 0;
+    lastRequested = -1;
+    lastParent = nullptr;
+    lastContext = nullptr;
     alignas(16) std::uint8_t initializer[16]{};
     alignas(16) std::uint8_t parameter[64]{};
     Require(_ZN3sce4Json11InitializerC1Ev(initializer) == 0);
     Require(_ZN3sce4Json11Initializer10initializeEPKNS0_13InitParameterE(initializer, parameter) == 0);
     int context = 0;
-    Require(_ZN3sce4Json11Initializer27setGlobalNullAccessCallBackEPFRKNS0_5ValueENS0_9ValueTypeEPS3_PvES7_(initializer, OnNullAccess, &context) == 0);
+    Require(setCallback(initializer, OnNullAccess, &context) == 0);
     _ZN3sce4Json5ValueC1Ev(&fallback);
     Require(_ZN3sce4Json5Value3setEl(&fallback, 99) == 0);
 
@@ -355,6 +361,7 @@ int main() {
     ParseAndRoundTrip();
     NestingDepth();
     ObjectsAndArrays();
-    NullAccess();
+    NullAccess(_ZN3sce4Json11Initializer27setGlobalNullAccessCallBackEPFRKNS0_5ValueENS0_9ValueTypeEPS3_PvES7_);
+    NullAccess(_ZN3sce4Json11Initializer27setGlobalNullAccessCallbackEPFRKNS0_5ValueENS0_9ValueTypeEPS3_PvES7_);
     ValueAccess();
 }

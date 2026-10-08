@@ -196,7 +196,7 @@ int main() {
     FontHandle missing = nullptr;
     Require(sceFontOpenFontSet(library, ChineseGb, 1, nullptr, &missing) == SCE_FONT_ERROR_FONT_OPEN_FAILED && missing == nullptr);
 
-    std::filesystem::remove(fonts / "SST-Bold.otf");
+    std::filesystem::rename(fonts / "SST-Bold.otf", root / "SST-Bold.otf");
     FontHandle substitute = nullptr;
     Require(sceFontOpenFontSet(library, EuropeanBold, 3, nullptr, &substitute) == SCE_FONT_OK);
     Require(sceFontSetScalePixel(substitute, 100.0f, 100.0f) == SCE_FONT_OK);

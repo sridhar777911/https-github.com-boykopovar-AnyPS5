@@ -9,6 +9,8 @@
 #include <thread>
 
 extern "C" {
+extern const std::uint8_t in6addr_any_nid_postfix[16];
+extern const std::uint8_t in6addr_loopback_nid_postfix[16];
 int APS5_VABI sceNetInit_nid_postfix(void);
 int APS5_VABI sceNetSocket(const char*, int, int, int);
 int APS5_VABI sceNetBind_nid_postfix(int, const void*, std::uint32_t);
@@ -27,6 +29,7 @@ int APS5_VABI sceNetEpollCreate(const char*, int);
 int APS5_VABI sceNetEpollControl(int, int, int, const NetEpollEvent*);
 int APS5_VABI sceNetEpollWait(int, NetEpollEvent*, int, int);
 int APS5_VABI sceNetEpollDestroy(int);
+extern const std::uint32_t sce_net_in6addr_any[4];
 int APS5_VABI sceNetResolverCreate(const char*, int, int);
 int APS5_VABI sceNetResolverStartNtoa(int, const char*, void*, int, int, int);
 int APS5_VABI sceNetResolverDestroy(int);
@@ -142,12 +145,51 @@ static void CheckAddressText(int family, const char* text) {
     Require(sceNetInetNtop(family, address.data(), nullptr, output.size()) == nullptr && *sceNetErrnoLoc() == 22);
 }
 
+static void CheckUnspecifiedIpv6() {
+    std::array<std::uint8_t, 16> unspecified{};
+    Require(sceNetInetPton(28, "::", unspecified.data()) == 1);
+    Require(std::memcmp(sce_net_in6addr_any, unspecified.data(), unspecified.size()) == 0);
+    char text[4] = {'x', 'x', 'x', 'x'};
+    Require(sceNetInetNtop(28, sce_net_in6addr_any, text, 3) == text);
+    Require(std::strcmp(text, "::") == 0 && text[3] == 'x');
+
+    const int receiver = sceNetSocket("ipv6-any", 28, 2, 17);
+    const int sender = sceNetSocket("ipv6-loopback", 28, 2, 17);
+    Require(receiver >= 0 && sender >= 0);
+    std::array<std::uint8_t, 28> address{28, 28};
+    std::memcpy(address.data() + 8, sce_net_in6addr_any, 16);
+    Require(sceNetBind_nid_postfix(receiver, address.data(), address.size()) == 0);
+    std::uint32_t size = address.size();
+    address.fill(0xa5);
+    Require(sceNetGetsockname(receiver, address.data(), &size) == 0 && size == address.size());
+    Require(address[0] == 28 && address[1] == 28 && (address[2] != 0 || address[3] != 0));
+    Require(std::memcmp(address.data() + 8, unspecified.data(), unspecified.size()) == 0);
+    Require(sceNetInetPton(28, "::1", address.data() + 8) == 1);
+
+    const char payload[] = "IPv6 wildcard receive";
+    Require(sceNetSendto(sender, payload, sizeof(payload), 0, address.data(), address.size()) == sizeof(payload));
+    char received[sizeof(payload)]{};
+    std::array<std::uint8_t, 28> peer{};
+    size = peer.size();
+    Require(sceNetRecvfrom(receiver, received, sizeof(received), 0, peer.data(), &size) == sizeof(received));
+    Require(std::memcmp(received, payload, sizeof(payload)) == 0 && size == peer.size() && peer[1] == 28);
+    Require(std::memcmp(peer.data() + 8, address.data() + 8, 16) == 0);
+    Require(std::memcmp(sce_net_in6addr_any, unspecified.data(), unspecified.size()) == 0);
+    Require(sceNetSocketClose(sender) == 0);
+    Require(sceNetSocketClose(receiver) == 0);
+}
+
 int main() {
+    for (int i = 0; i < 16; ++i) {
+        Require(in6addr_any_nid_postfix[i] == 0);
+        Require(in6addr_loopback_nid_postfix[i] == (i == 15 ? 1 : 0));
+    }
     Require(sceNetInit_nid_postfix() == 0);
     CheckAddressText(2, "127.0.0.1");
     CheckAddressText(2, "255.255.255.255");
     CheckAddressText(28, "::1");
     CheckAddressText(28, "1234:5678:9abc:def0:1234:5678:9abc:def0");
+    CheckUnspecifiedIpv6();
 
     const int listener = sceNetSocket(nullptr, 2, 1, 6);
     Require(listener >= 0);

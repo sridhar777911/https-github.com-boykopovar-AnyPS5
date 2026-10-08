@@ -67,7 +67,7 @@ public:
     // continuing draw the command buffer without ending it.
     bool ContinuesRenderPass(std::uint64_t key) const;
     VkCommandBuffer CommandsInRenderPass();
-    void LeaveRenderPassOpen(std::uint64_t key, std::uint32_t timing, bool continuable);
+    void LeaveRenderPassOpen(std::uint64_t key, std::uint32_t timing, bool continuable, std::function<void(VkCommandBuffer)> afterPass = {});
     // DCC "uncompressed" key stores (DccMetadata.cpp StoreUncompressedOnGpu): queued on the open
     // batch and recorded as one run (one barrier pair for every queued fill) at Submit, before a
     // label store (RecordStore), or before a command that writes or reads a queued range (the
@@ -590,6 +590,7 @@ private:
             bool continuable = false;
             std::uint64_t key = 0;
             std::uint32_t timing = NoTiming;
+            std::function<void(VkCommandBuffer)> afterPass;
         } renderPass;
         // A pass ended in this batch: Submit records the host-read barrier its draws left out.
         bool hostReadOwed = false;

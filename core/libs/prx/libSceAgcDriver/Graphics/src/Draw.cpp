@@ -1182,6 +1182,7 @@ struct RecordedDraw {
     std::shared_ptr<Framebuffer> framebuffer;
     std::span<const VkImageView> targetViews;
     std::vector<std::shared_ptr<StorageTexture>> targets;
+    std::vector<std::shared_ptr<StorageTexture>> proxies;
     const IndirectRecord* indirect = nullptr;
     std::span<const ShaderResources::MovedBuffer> moved;
     bool listed = false;
@@ -1358,6 +1359,10 @@ void recordDraw(const Context& context, const State& state, const Pm4::DrawParam
     if (continued) {
         record.pipeline->Continue(commands, state);
     } else {
+        for (const auto& proxy : record.proxies) {
+            proxy->RecordAttachmentProxyLoad(commands, VK_IMAGE_LAYOUT_GENERAL);
+            countBarrier(2);
+        }
         const VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
         context.Resolved(&DeviceFunctions::cmdPipelineBarrier, "vkCmdPipelineBarrier")(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | inputs.shaderStages, 0, 1, &before, 0, nullptr, 0, nullptr);
         countBarrier(1);
@@ -1391,7 +1396,16 @@ void recordDraw(const Context& context, const State& state, const Pm4::DrawParam
     // The pass stays open for the next draw of these attachments; the recorder ends it (and the
     // draw class range) before anything else is recorded. A draw that wrote memory owes the next
     // one a barrier, so its pass cannot be continued.
-    recorder->LeaveRenderPassOpen(passKey, drawTiming, !resources.WritesMemory());
+    std::function<void(VkCommandBuffer)> storeProxies;
+    if (!continued && !record.proxies.empty()) {
+        storeProxies = [proxies = record.proxies](VkCommandBuffer passCommands) {
+            for (const auto& proxy : proxies) {
+                proxy->RecordAttachmentProxyStore(passCommands, VK_IMAGE_LAYOUT_GENERAL);
+                Recorder::CountBarriers(Recorder::CommandClass::Draw, 2);
+            }
+        };
+    }
+    recorder->LeaveRenderPassOpen(passKey, drawTiming, !resources.WritesMemory(), std::move(storeProxies));
     timer.phase(PhaseRecord);
     keepRecordedDraw(*recorder, record.resources, std::move(record.pipeline), std::move(record.framebuffer), inputs, std::move(record.targets), std::move(scratch), std::move(checkRecords), record.listed, record.completion, outcome);
     timer.phase(PhaseKeep);
@@ -1480,6 +1494,7 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
         // Resident target: the surface's cached storage image is attached directly and marked dirty
         // afterwards, so nothing is copied in or out per draw.
         std::shared_ptr<StorageTexture> resident;
+        bool proxied = false;
         // Linear pixels converted on the CPU, for targets the GPU detiler does not handle.
         std::unique_ptr<Buffer> transfer;
         // Guest bytes in host memory, and their device-local copies for the detiler.
@@ -1524,7 +1539,8 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
         }
         if (binding.resident != nullptr) {
             timer.phase(PhaseReadTarget);
-            targetViews.push_back(binding.resident->AttachmentView(color.format, color.mip, color.depthSlice));
+            binding.proxied = AttachmentProxyFormat(context, color.format) != VK_FORMAT_UNDEFINED;
+            targetViews.push_back(binding.proxied ? binding.resident->AttachmentProxyView() : binding.resident->AttachmentView(color.format, color.mip, color.depthSlice));
             continue;
         }
         Require(!color.mipTail, "rendering into a packed mip tail needs the resident image of its surface");
@@ -1683,6 +1699,13 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
     APS5_LOG_CHARS_OUT_DEBUG("Creating Pipeline");
     // The state is copied only when a mask must change.
     auto masked = maskedState(state, inputs.fragmentOutputs);
+    if (std::any_of(targets.begin(), targets.end(), [](const TargetBinding& binding) { return binding.proxied; })) recipeOut = nullptr;
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+        if (!targets[index].proxied) continue;
+        if (!masked.has_value()) masked = state;
+        masked->colors[index].format = AttachmentProxyFormat(context, state.colors[index].format);
+        masked->blends.at(state.colors[index].exportIndex).colorWriteMask &= VK_COLOR_COMPONENT_R_BIT;
+    }
     const State& pipelineState = masked.has_value() ? *masked : state;
     auto pipeline = CachedPipeline(context, pipelineState, inputs.vertexInput, *resources, shaders, lean ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     // Resident targets' views are stable while their storage image lives, so the framebuffer is
@@ -1702,6 +1725,9 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
         record.framebuffer = framebuffer;
         record.targetViews = targetViews;
         record.targets = owners;
+        for (const auto& binding : targets) {
+            if (binding.proxied) record.proxies.push_back(binding.resident);
+        }
         record.indirect = args != nullptr ? &indirect : nullptr;
         record.listed = listed;
         record.completion = completion;
@@ -1800,6 +1826,11 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
         rewritten = recordIndirectArguments(context, commands, recorder, recorded, indirect, scratch, argumentBuffer, argumentOffset, countBarrier);
     }
     for (auto& binding : targets) {
+        if (binding.proxied) {
+            binding.resident->RecordAttachmentProxyLoad(commands, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            countBarrier(2);
+            continue;
+        }
         if (binding.resident != nullptr) {
             imageBarrier(context, commands, binding.resident->Image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
             countBarrier();
@@ -1835,6 +1866,11 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
     context.Resolved(&DeviceFunctions::cmdEndRenderPass, "vkCmdEndRenderPass")(commands);
     APS5_LOG_CHARS_OUT_DEBUG("Render pass ended");
     for (auto& binding : targets) {
+        if (binding.proxied) {
+            binding.resident->RecordAttachmentProxyStore(commands, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            countBarrier(2);
+            continue;
+        }
         if (binding.resident != nullptr) {
             imageBarrier(context, commands, binding.resident->Image(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT);
             countBarrier();
