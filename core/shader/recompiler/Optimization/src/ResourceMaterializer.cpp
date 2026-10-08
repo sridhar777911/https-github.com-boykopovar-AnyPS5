@@ -761,6 +761,7 @@ void ResourceMaterializer::Apply(IrProgram& program, const ResourceSpecializatio
             }
             auto sampler = samplers[index];
             sampler.forcePointFiltering = true;
+            sampler.copyOf = index;
             samplers.push_back(sampler);
         }
     }
