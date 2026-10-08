@@ -35,6 +35,8 @@ Throughout the project, every function at every stage either **does exactly what
 - [libSceHttp](../../core/libs/prx/libSceHttp/Export.cpp) - no request reaches the network, so `sceHttpSetResponseHeaderMaxSize` has no response header to limit and `sceHttpRedirectCacheFlush` no redirect to forget; `sceHttpsUnloadCert` returns success like `sceHttpsLoadCert`, which keeps no certificate
 - [sceFontGlyphDefineAttribute](../../core/libs/prx/libSceFont/src/Render.cpp) (libSceFont) checks the glyph and ignores the attribute and its value, whose meaning is unknown. PPSA01325 sets attribute 0x11 to 0 on a glyph from `sceFontGenerateCharGlyph` that it deletes unused, and draws the character with `sceFontRenderCharGlyphImageHorizontal`
 
+- Windows host-pointer imports are compared instead of write-watched: a driver can mark imported pages dirty after the synchronous import window. [GuestMemory](../../core/libs/prx/libSceAgcDriver/Execution/src/GuestMemory.cpp) excludes every overlapping 64 KiB tracker block for the process lifetime, including after that allocation is reused. This preserves CPU edits through byte comparisons but disables snapshot reuse and unit shadows for those blocks; restoring tracking safely after import retirement is unimplemented.
+
 ### Unknown function info
 
 - [sceHmd2Initialize](../../core/libs/prx/libSceHmd2/Export.cpp) (libSceHmd2) - the error the console returns when the PS VR2 runtime is unavailable is unknown; it returns libSceHmd's `UNSUPPORTED_FEATURE` (0x81110016). PPSA01317 passes a pointer to 16 zeroed bytes and only tests the result for non-zero

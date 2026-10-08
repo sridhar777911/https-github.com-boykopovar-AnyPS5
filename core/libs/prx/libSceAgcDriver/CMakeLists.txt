@@ -202,6 +202,10 @@ set_target_properties(libSceAgcDriver PROPERTIES CXX_EXTENSIONS OFF)
 configure_windows_unwind(libSceAgcDriver)
 
 if(BUILD_TESTING)
+    add_test_executable(agc_write_watch_coverage_tests tests/WriteWatchCoverage.cpp)
+    target_include_directories(agc_write_watch_coverage_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    add_test(NAME agc_write_watch_coverage COMMAND agc_write_watch_coverage_tests)
+
     add_test_executable(agc_profile_output_tests tests/ProfileOutput.cpp)
     target_include_directories(agc_profile_output_tests PRIVATE ${LIBS_INCLUDE_DIR})
     target_link_libraries(agc_profile_output_tests PRIVATE libc)

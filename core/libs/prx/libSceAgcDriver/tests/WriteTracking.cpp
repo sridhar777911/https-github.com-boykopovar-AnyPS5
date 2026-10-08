@@ -117,6 +117,30 @@ void CheckOwnStore() {
     CollectWritesUncached(base, 2 * Block);
     Require(!UnchangedSince(base, 64, beforeCpu), "a CPU write after the driver store is not seen");
 }
+
+void CheckUnwatch() {
+    void* memory = AllocateWatched(3 * Block);
+    const auto base = reinterpret_cast<std::uint64_t>(memory);
+    const auto imported = base + Block;
+    std::memset(memory, 0x11, 3 * Block);
+    BumpCollectEpoch();
+    const auto before = CollectWrites(base, 3 * Block);
+    Require(before != 0 && UnchangedSince(imported, Block, before), "the import range was not initially watched");
+    Unwatch(imported, Block);
+    Require(!Watched(imported, Block) && !UnchangedSince(imported, Block, before), "unwatch kept trusting import stamps");
+    Require(CollectWrites(base, 3 * Block) == 0 && CollectWritesUncached(imported, Block) == 0, "unwatch did not invalidate a cached collect");
+    Require(Watched(base, Block) && Watched(base + 2 * Block, Block), "unwatch disabled unrelated memory");
+    Require(MarkWritten(imported, Block) == 0, "an unwatched import still produces trusted stamps");
+    std::array<std::uint64_t, 1> generations{before};
+    std::array<std::uint8_t, 1> changed{};
+    Require(!ChangedBlocks(imported, Block, generations, changed), "an unwatched import still uses block stamps");
+    Unwatch(imported, Block);
+    const auto adjacent = CollectWrites(base, Block);
+    Require(adjacent != 0, "unwatch broke the adjacent block's collect");
+    static_cast<volatile std::uint8_t*>(memory)[0] = 0x33;
+    CollectWritesUncached(base, Block);
+    Require(!UnchangedSince(base, Block, adjacent), "unwatch hid a CPU edit in unrelated memory");
+}
 }
 
 int main() {
@@ -127,6 +151,7 @@ int main() {
         }
         CheckSharedBlock();
         CheckOwnStore();
+        CheckUnwatch();
     } catch (const std::exception& error) {
         std::cerr << "write tracking test failed: " << error.what() << "\n";
         return 1;
