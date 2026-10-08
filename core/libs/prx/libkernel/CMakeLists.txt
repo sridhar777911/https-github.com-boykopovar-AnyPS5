@@ -65,6 +65,25 @@ endif()
 configure_windows_unwind(libkernel)
 
 if(BUILD_TESTING)
+    add_test_executable(download_data_mount_tests ${LIBS_INCLUDE_DIR}/tests/GuestDownloadDataMount.cpp)
+    target_include_directories(download_data_mount_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(download_data_mount_tests PRIVATE libkernel libc)
+    configure_windows_unwind(download_data_mount_tests)
+    foreach(downloadDataCase IN ITEMS declared:256 none:0)
+        string(REPLACE ":" ";" downloadDataCase ${downloadDataCase})
+        list(GET downloadDataCase 0 downloadDataName)
+        list(GET downloadDataCase 1 downloadDataSize)
+        set(downloadDataRun ${CMAKE_CURRENT_BINARY_DIR}/download_data_mount_${downloadDataName})
+        file(WRITE ${downloadDataRun}/app0/sce_sys/param.json
+            "{\"titleId\":\"PPSA00000\",\"localizedParameters\":{\"en-US\":{\"titleName\":\"Example\"}},\"downloadDataSize\":${downloadDataSize},"
+            "\"userDefinedParam1\":0,\"userDefinedParam2\":0,\"userDefinedParam3\":0,\"userDefinedParam4\":0}")
+        add_test(NAME download_data_mount_${downloadDataName} COMMAND download_data_mount_tests ${downloadDataName}
+            WORKING_DIRECTORY ${downloadDataRun})
+        if(WIN32)
+            set_tests_properties(download_data_mount_${downloadDataName} PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:libkernel>")
+        endif()
+    endforeach()
     add_test_executable(param_json_parser_tests ${LIBS_INCLUDE_DIR}/tests/ParamJsonParser.cpp)
     target_include_directories(param_json_parser_tests PRIVATE ${LIBS_INCLUDE_DIR})
     target_link_libraries(param_json_parser_tests PRIVATE libkernel libc)
