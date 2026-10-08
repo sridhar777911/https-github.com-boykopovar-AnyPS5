@@ -16,6 +16,7 @@ namespace AgcDriver::Graphics {
 class TextureDetiler;
 class GpuColorTransfer;
 class BufferPool;
+class ImageMemory;
 class TextureCache;
 class RenderCache;
 class DrawQueue;
@@ -110,6 +111,7 @@ struct Context {
     RenderCache* renderCache = nullptr;
     DrawQueue* drawQueue = nullptr;
     GraphicsPipelineCache* graphicsPipelines = nullptr;
+    ImageMemory* imageMemory = nullptr;
     // Batches GPU work across guest commands (see Recorder); null before the device finished setup.
     Recorder* recorder = nullptr;
     // Per-device caches of the immutable descriptor objects a ShaderResources build needs (set
