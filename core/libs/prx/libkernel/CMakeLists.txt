@@ -191,9 +191,9 @@ if(BUILD_TESTING)
     target_link_libraries(guest_pthread_start_tests PRIVATE libkernel libc)
     configure_windows_unwind(guest_pthread_start_tests)
     add_test(NAME guest_pthread_start COMMAND guest_pthread_start_tests)
-    set_tests_properties(guest_pthread_start PROPERTIES TIMEOUT 120)
+    set_tests_properties(guest_pthread_start PROPERTIES TIMEOUT 20)
     if(WIN32)
-        set_tests_properties(guest_pthread_start PROPERTIES ENVIRONMENT_MODIFICATION
+        set_tests_properties(guest_pthread_start PROPERTIES TIMEOUT 60 ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libkernel>")
     endif()
     add_test_executable(guest_cond_timedwait_tests ${LIBS_INCLUDE_DIR}/tests/GuestCondTimedwait.cpp)
