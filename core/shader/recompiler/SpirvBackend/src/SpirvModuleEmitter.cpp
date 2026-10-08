@@ -1,4 +1,5 @@
 #include "SpirvBackend/SpirvModuleEmitter.hpp"
+#include "SpirvBackend/SpirvBufferFormat.hpp"
 #include "SpirvBackend/SpirvEmitterHelpers.hpp"
 #include "SpirvBackend/SpirvEmitterInstructions.hpp"
 #include "SpirvBackend/SpirvFlowEmitter.hpp"
@@ -207,6 +208,30 @@ std::uint32_t MrtOutputMode(const SpirvEmitterState& state, const ExportInfo& ex
         return 0u;
     }
     return state.inputInfo.pixel->targetOutputMode[exp.index];
+}
+
+ColorExportPacking MrtPacking(const SpirvEmitterState& state, const ExportInfo& exp) {
+    if (state.program.Resources().stage != IrShaderStage::Pixel || exp.kind != ExportTargetKind::Mrt || state.inputInfo.pixel == nullptr || exp.index >= state.inputInfo.pixel->targetExportPacking.size()) {
+        return ColorExportPacking::None;
+    }
+    return state.inputInfo.pixel->targetExportPacking[exp.index];
+}
+
+std::uint32_t PackUnorm10_11_11(SpirvEmitterState& state, std::uint32_t color) {
+    const auto info = GetFormatInfo(IrBufferFormat::Format11_11_10UNorm);
+    auto packed = ConstantU32(state, 0u);
+    for (std::uint32_t component = 0; component < info.componentCount; component++) {
+        const auto value = state.module.AllocateId();
+        state.module.AddFunction(spv::OpCompositeExtract, TypeF32(state), value, color, component);
+        const auto bits = state.module.AllocateId();
+        state.module.AddFunction(spv::OpBitcast, TypeU32(state), bits, value);
+        const auto field = EmitFormatStoreComponent(state, info, component, bits);
+        packed = EmitOrU32(state, packed, info.componentBitOffset[component] == 0u ? field : EmitBinaryU32(state, spv::OpShiftLeftLogical, field, ConstantU32(state, info.componentBitOffset[component])));
+    }
+    const auto zero = ConstantU32(state, 0u);
+    const auto result = state.module.AllocateId();
+    state.module.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 4u), result, packed, zero, zero, zero);
+    return result;
 }
 
 std::uint32_t ExportRawComponent(SpirvValueEmitContext& ctx, std::uint32_t vector, std::uint32_t component) {
@@ -1121,6 +1146,10 @@ void EmitSetAttribute(SpirvValueEmitContext& ctx, const IrValue& inst) {
                 state.module.AddFunction(spv::OpVectorShuffle, vectorType, mapped, value, value, mapping.Map(0), mapping.Map(1), mapping.Map(2), mapping.Map(3));
                 value = mapped;
             }
+        }
+        if (MrtPacking(state, exp) == ColorExportPacking::Unorm10_11_11) {
+            if (uintOutput) ctx.Fail(inst, "exports UINT16_ABGR colors to a 10_11_11 unorm target");
+            value = PackUnorm10_11_11(state, value);
         }
         if (exp.kind == ExportTargetKind::Position) {
             if (state.inputInfo.vertex == nullptr) {

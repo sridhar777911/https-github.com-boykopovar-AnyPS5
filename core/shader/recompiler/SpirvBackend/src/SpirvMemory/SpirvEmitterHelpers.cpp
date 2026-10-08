@@ -365,7 +365,7 @@ void DefineOutputs(SpirvEmitterState& state) {
             break;
         case StageOutputKind::Parameter:
         case StageOutputKind::Mrt: {
-            const bool uintOutput = binding.kind == StageOutputKind::Mrt && state.program.Resources().stage == IrShaderStage::Pixel && binding.index < std::size(PixelInfo(state).targetOutputMode) && PixelInfo(state).targetOutputMode[binding.index] == 7u;
+            const bool uintOutput = binding.kind == StageOutputKind::Mrt && state.program.Resources().stage == IrShaderStage::Pixel && binding.index < std::size(PixelInfo(state).targetOutputMode) && (PixelInfo(state).targetOutputMode[binding.index] == 7u || PixelInfo(state).targetExportPacking[binding.index] != ColorExportPacking::None);
             const auto type = uintOutput ? TypeU32Vector(state, 4u) : TypeF32Vector(state, 4u);
             binding.variableId = DefineInterfaceVariable(state, type, spv::StorageClassOutput, binding.debugName.c_str());
             state.module.AddAnnotation(spv::OpDecorate, binding.variableId, spv::DecorationLocation, binding.location);
