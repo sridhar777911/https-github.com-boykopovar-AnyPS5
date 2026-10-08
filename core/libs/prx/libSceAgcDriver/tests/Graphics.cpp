@@ -1703,6 +1703,25 @@ std::vector<std::uint32_t> makeModule(const ModuleShape& shape) {
     return words;
 }
 
+void textureCacheBudgetTests() {
+    using AgcDriver::Graphics::TextureCacheBudget;
+    constexpr std::uint64_t GiB = 1ull << 30u;
+    VkPhysicalDeviceMemoryProperties memory{};
+    Require(TextureCacheBudget(memory) == 2 * GiB, "a device without memory heaps does not keep 2 GiB of cached textures");
+    memory.memoryHeapCount = 3;
+    memory.memoryHeaps[0] = {256ull << 20u, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT};
+    memory.memoryHeaps[1] = {32 * GiB, 0};
+    memory.memoryHeaps[2] = {16 * GiB, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT | VK_MEMORY_HEAP_MULTI_INSTANCE_BIT};
+    Require(TextureCacheBudget(memory) == 4 * GiB, "a 16 GiB device-local heap does not give 4 GiB of cached textures");
+    memory.memoryHeaps[2].size = 6 * GiB;
+    Require(TextureCacheBudget(memory) == 2 * GiB, "a 6 GiB device-local heap does not keep the 2 GiB floor");
+    memory.memoryHeaps[2].size = 24 * GiB;
+    memory.memoryHeapCount = 2;
+    Require(TextureCacheBudget(memory) == 2 * GiB, "a heap past memoryHeapCount or a host heap counted toward the texture caches");
+    memory.memoryHeapCount = 3;
+    Require(TextureCacheBudget(memory) == 6 * GiB, "a 24 GiB device-local heap does not give 6 GiB of cached textures");
+}
+
 void rectListTests() {
     using namespace ShaderRecompiler;
     using namespace AgcDriver::Graphics;
@@ -2284,6 +2303,7 @@ int main() {
         vertexCopyTests();
         pixelParameterSlotTests();
         rectListTests();
+        textureCacheBudgetTests();
         mock = MockVulkan{};
         auto bdaContext = mockContext();
         bdaContext.bufferDeviceAddress = true;

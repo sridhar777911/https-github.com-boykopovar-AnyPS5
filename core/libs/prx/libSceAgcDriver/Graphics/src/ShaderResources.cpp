@@ -211,6 +211,10 @@ void logLookup(const LookupRecord& record) {
 
 std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std::span<const std::uint32_t> words, const GuestTextureResource& resource, std::uint32_t mip, std::uint64_t guestBytes = 0);
 
+std::uint64_t heldBytes(const StorageTexture& image) {
+    return std::max<std::uint64_t>(image.AllocationBytes(), image.GuestBytes());
+}
+
 bool MetadataMoved(const StorageTexture& image, const GuestTextureResource& resource) {
     return resource.dccAddress != 0 && image.Descriptor().dccAddress != resource.dccAddress && !image.ServesKeysAt(resource.dccAddress);
 }
@@ -421,11 +425,11 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
         eraseTexture(cache, it);
     }
     CachedTexture entry{key, address, std::vector<std::byte>(source != nullptr ? 0u : bytes), nullptr, *keys, generation};
-    entry.accounted = guestBytes;
     if (source != nullptr) {
         entry.source = source;
         entry.sourceVersion = source->Version();
         entry.texture = std::make_shared<Texture>(context, source, resource, components);
+        entry.accounted = heldBytes(*source);
         counters.fromStorage.fetch_add(1, std::memory_order_relaxed);
     } else {
         // Snapshot before the upload so a write racing with it is caught by the next comparison.
@@ -438,9 +442,10 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
             std::fprintf(stderr, "[texture] 0x%llx %ux%u format %u tile %d: %zu of %zu sampled bytes nonzero\n", static_cast<unsigned long long>(resource.baseAddress), resource.width, resource.height, resource.format, static_cast<int>(resource.tileMode), nonzero, entry.bytes.size() / 64);
         }
         entry.texture = std::make_shared<Texture>(context, *context.detiler, resource, components, entry.bytes, depthCompare);
+        entry.accounted = std::max<std::uint64_t>(entry.texture->AllocationBytes(), entry.bytes.size());
         counters.snapshots.fetch_add(1, std::memory_order_relaxed);
     }
-    constexpr std::uint64_t budget = 2048ull << 20u;
+    const auto budget = TextureCacheBudget(context.memory);
     while (!cache.entries.empty() && cache.bytes + entry.accounted > budget) eraseTexture(cache, std::prev(cache.entries.end()));
     cache.bytes += entry.accounted;
     auto texture = entry.texture;
@@ -470,6 +475,7 @@ struct CachedStorageTexture {
     StorageKey key;
     std::uint32_t mip;
     std::shared_ptr<StorageTexture> texture;
+    std::uint64_t accounted = 0;
 };
 
 // As TextureCache: use order with a hash index by key, plus one by image for StorageImageCached.
@@ -512,7 +518,7 @@ std::list<CachedStorageTexture>::iterator findStorageByImage(StorageTextureCache
 void evictStorage(StorageTextureCache& cache, std::list<CachedStorageTexture>::iterator it) {
     it->texture->SetCached(false);
     it->texture->Flush();
-    cache.bytes -= it->texture->GuestBytes();
+    cache.bytes -= it->accounted;
     cache.index.erase(it->key);
     cache.byImage.erase(it->texture.get());
     cache.entries.erase(it);
@@ -608,9 +614,10 @@ std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std
     // APS5_NO_KEEP_NEW_STORAGE=1 leaves the image to its cache entry alone, as before.
     static const bool keepNew = std::getenv("APS5_NO_KEEP_NEW_STORAGE") == nullptr;
     if (auto* recorder = Recorder::Active(); keepNew && recorder != nullptr && GuestMemory::GpuMutex().HeldByThisThread() && recorder->Recording()) recorder->Keep(entry.texture);
-    constexpr std::uint64_t budget = 2048ull << 20u;
-    while (!cache.entries.empty() && cache.bytes + entry.texture->GuestBytes() > budget) evictStorage(cache, std::prev(cache.entries.end()));
-    cache.bytes += entry.texture->GuestBytes();
+    entry.accounted = heldBytes(*entry.texture);
+    const auto budget = TextureCacheBudget(context.memory);
+    while (!cache.entries.empty() && cache.bytes + entry.accounted > budget) evictStorage(cache, std::prev(cache.entries.end()));
+    cache.bytes += entry.accounted;
     auto texture = entry.texture;
     cache.entries.push_front(std::move(entry));
     cache.index[key] = cache.entries.begin();
@@ -621,6 +628,14 @@ std::shared_ptr<StorageTexture> cachedStorageTexture(const Context& context, std
     return texture;
 }
 
+}
+
+std::uint64_t TextureCacheBudget(const VkPhysicalDeviceMemoryProperties& memory) {
+    VkDeviceSize heap = 0;
+    for (std::uint32_t i = 0; i < std::min<std::uint32_t>(memory.memoryHeapCount, VK_MAX_MEMORY_HEAPS); ++i) {
+        if ((memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) heap = std::max(heap, memory.memoryHeaps[i].size);
+    }
+    return std::max<std::uint64_t>(2048ull << 20u, heap / 4u);
 }
 
 void FlushCachedTextures(VkDevice device) {
@@ -651,7 +666,7 @@ void ClearCachedTextures(VkDevice device) {
             continue;
         }
         it->texture->SetCached(false);
-        storage.bytes -= it->texture->GuestBytes();
+        storage.bytes -= it->accounted;
         storage.index.erase(it->key);
         storage.byImage.erase(it->texture.get());
         it = storage.entries.erase(it);
