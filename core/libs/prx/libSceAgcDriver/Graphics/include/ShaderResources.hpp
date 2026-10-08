@@ -60,9 +60,6 @@ public:
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkDescriptorPool pool = VK_NULL_HANDLE;
     };
-    // A set of `layout` needing `sizes` descriptors from the pool chain, opening a pool when no pool
-    // has room; a null set when the needs exceed what one chain pool holds (the caller then makes a
-    // dedicated pool, as before).
     SetAllocation Allocate(VkDescriptorSetLayout layout, std::span<const VkDescriptorPoolSize> sizes);
     void Free(const SetAllocation& allocation) noexcept;
     // APS5_PROFILE_DRAW counters: layouts served from the map / created, sets allocated, pools opened.
@@ -71,6 +68,7 @@ public:
         std::uint64_t layoutMisses = 0;
         std::uint64_t sets = 0;
         std::uint64_t pools = 0;
+        std::uint64_t dedicatedPools = 0;
     };
     Stats Counters() const;
 
@@ -82,6 +80,7 @@ private:
     mutable std::mutex mutex;
     std::map<std::vector<std::uint32_t>, VkDescriptorSetLayout> layouts;
     std::vector<VkDescriptorPool> pools;
+    std::vector<VkDescriptorPool> dedicated;
     Stats stats;
 };
 
@@ -396,7 +395,6 @@ private:
     // Whether the layout is this object's own (no cache) and destroyed with it.
     bool ownsLayout = false;
     VkDescriptorSet _set = VK_NULL_HANDLE;
-    // Dedicated pool of this object's set (no cache, or a set too large for a cache pool).
     VkDescriptorPool pool = VK_NULL_HANDLE;
     // The cache pool the set was allocated from, freed back to it on release.
     VkDescriptorPool cachePool = VK_NULL_HANDLE;
