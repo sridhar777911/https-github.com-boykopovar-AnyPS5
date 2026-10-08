@@ -15,3 +15,9 @@ Comments in code can only be added to indicate areas of [technical debt](Technic
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
 
 There's no need to add image files to the repository. You can add images to the [gist](https://gist.github.com/boykopovar/0e53f2e1426f29ecd41e3b51540b8a90) comments and paste a link into the md file.
+## Documentation and agent guidance
+
+Maintained guides and scoped `AGENTS.md` files follow the
+[documentation policy](../../CONTRIBUTING.md#documentation). Use
+`python3 tools/check_docs.py` for current local paths and heading links.
+Transient investigation notes remain in the pull request.

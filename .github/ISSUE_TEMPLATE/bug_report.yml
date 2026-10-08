@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a build, conversion or runtime failure with reproducible evidence.
+body:
+  - type: markdown
+    attributes:
+      value: "Include the first failure and a minimal reproduction. Do not upload proprietary executables, firmware or keys."
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Failure stage
+      options:
+        - Configure or build
+        - Conversion
+        - Native loader or startup
+        - Runtime or graphics
+        - Documentation or tooling
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit, host OS/architecture, target OS, full or relinker-only build, compiler/CMake/Python versions, CPU/GPU/driver where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact configure/build/conversion commands, relevant environment variables and minimal fixture or homebrew. Include title/version if applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: First error and relevant logs
+      description: Paste text with private paths or identifiers redacted.
+      render: text
+    validations:
+      required: true

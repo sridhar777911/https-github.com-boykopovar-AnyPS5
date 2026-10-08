@@ -39,6 +39,10 @@ if(BUILD_TESTING)
     if(Python3_Interpreter_FOUND)
         add_test(NAME progress_report COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_progress.py)
+        add_test(NAME documentation_links COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_docs.py)
+        add_test(NAME documentation_policy COMMAND ${Python3_EXECUTABLE}
+            -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tools/tests -p "test_*.py")
     endif()
 endif()
 

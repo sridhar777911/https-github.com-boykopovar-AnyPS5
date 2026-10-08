@@ -15,7 +15,7 @@ RULES = {
     "system-dependency": ("error", "CONTRIBUTING.md#code", "Third-party code is a submodule under 3rdparty/ built from source, not found on the system"),
     "title-specific": ("error", "CONTRIBUTING.md#code", "Implement the general behaviour, not what one title needs; title-specific code belongs in its sce_module"),
     "extension": ("error", "CONTRIBUTING.md#code", "Avoid non-standard extensions where standard C++ is enough"),
-    "notes-file": ("error", "CONTRIBUTING.md#branches-and-pull-requests", "Notes, investigation and agent files go in the pull request, not in the repository"),
+    "notes-file": ("error", "CONTRIBUTING.md#documentation", "Keep maintained guides in docs/dev or docs/user and scoped AGENTS.md in owned directories; transient notes and investigation files go in the pull request"),
     "binary": ("error", "docs/dev/CONVENTIONS.md", "Only UTF-8 text files in the repository; images go in the gist comments"),
     "doc-link": ("error", "CONTRIBUTING.md#documentation", "Relative link to a file that does not exist"),
     "commit-subject": ("error", "docs/dev/CONVENTIONS.md", "Commit subject is not Conventional Commits"),
@@ -26,7 +26,7 @@ RULES = {
 CPP = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp"}
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp", ".ico", ".tga", ".dds"}
 NOTES = {".md", ".markdown", ".rst", ".log", ".patch", ".diff"}
-AGENT_FILES = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md"}
+AGENT_FILES = {"AGENT.md", "AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md"}
 
 CONVENTIONAL = re.compile(r"^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: \S")
 STRINGS = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
@@ -207,6 +207,10 @@ def library(path):
 
 def allowed_notes(path):
     p = PurePosixPath(path)
+    if path in ("AGENTS.md", "AGENT.md", "docs/README.md"):
+        return True
+    if p.name == "AGENTS.md" and p.parts[0] in ("core", "tools", "docs", ".github"):
+        return True
     if p.name in AGENT_FILES:
         return False
     if p.suffix.lower() not in NOTES:

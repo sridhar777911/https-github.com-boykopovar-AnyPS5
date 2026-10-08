@@ -1,5 +1,10 @@
 # Build
 
+Choose a mode below. Shared [CMake presets](../../CMakePresets.json) provide
+`relinker`, `relinker-debug` and `full` configure/build/test commands with
+CMake 3.22.1+. See [Development workflow](DEVELOPMENT.md) for preset examples
+and [Troubleshooting](../user/TROUBLESHOOTING.md) for setup failures.
+
 ## Relinker only
 
 The relinker can be built without initializing submodules or configuring SDL, Vulkan, FFmpeg, FreeType or the shader recompiler. It requires CMake, a C++20 compiler and a build tool. Python 3 enables the Python regression tests.
@@ -22,14 +27,14 @@ Use a separate build directory for the full build.
 git submodule update --init --recursive
 ```
 
-## Requirements
+### Full-build requirements
 
 - x86-64, Git, CMake 3.22.1 or newer, Ninja, C++20.
 - Linux: GCC, G++, binutils. SDL's X11 backend requires X11 and Xext development headers (`libx11-dev` and `libxext-dev` on Debian/Ubuntu).
 - Windows: only MinGW-w64 GCC 15.2.0 (WinLibs `x86_64-ucrt-posix-seh`, release `15.2.0posix-14.0.0-ucrt-r7`) is currently supported. Add its `mingw64/bin` directory to `PATH` before configuring.
 - FFmpeg binaries are downloaded during configuration unless `FFMPEG_PREBUILT_DIR` is set. With the WinLibs CMake, the download fails with status 60 (`SSL peer certificate or SSH remote key was not OK`) unless `SSL_CERT_FILE` names a CA bundle, for example `C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt` from Git for Windows, as in CI.
 
-## Commands
+### Full-build commands
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++

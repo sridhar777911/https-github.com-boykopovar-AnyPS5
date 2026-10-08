@@ -1,0 +1,49 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 1 },
+  "configurePresets": [
+    {
+      "name": "relinker",
+      "displayName": "Dependency-free relinker and tests",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-relinker",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ANYPS5_RELINKER_ONLY": "ON",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "relinker-debug",
+      "inherits": "relinker",
+      "displayName": "Dependency-free relinker (Debug)",
+      "binaryDir": "${sourceDir}/build-relinker-debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "full",
+      "displayName": "Full Linux/MinGW build and tests",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ANYPS5_RELINKER_ONLY": "OFF",
+        "BUILD_TESTING": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "relinker", "configurePreset": "relinker" },
+    { "name": "relinker-debug", "configurePreset": "relinker-debug" },
+    { "name": "full", "configurePreset": "full" }
+  ],
+  "testPresets": [
+    { "name": "relinker", "configurePreset": "relinker", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error", "timeout": 120 } },
+    { "name": "relinker-debug", "configurePreset": "relinker-debug", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error", "timeout": 120 } },
+    { "name": "full", "configurePreset": "full", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error", "timeout": 120 } }
+  ]
+}

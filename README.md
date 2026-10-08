@@ -1,39 +1,101 @@
-# About
+# AnyPS5
 
-Tool for automatic executables porting to Linux and Windows.
+Convert guest x86-64 executables into native Linux or Windows programs.
+AnyPS5 combines a [relinker](core/relinker) with native
+[system library implementations](core/libs/prx) and an RDNA-to-SPIR-V shader
+recompiler. Converted applications run as normal host processes and dynamically
+link the supplied libraries.
 
-Includes a [relinker](core/relinker) that converts executable to the target system's native format and implementations of [system prx libraries](core/libs/prx) suitable for dynamic linking. No emulation or separate runtime process.
+This is an early compatibility project. Unsupported states fail explicitly;
+conversion success and implementation percentages do not prove that a title is
+playable. See [recorded compatibility](docs/user/COMPATIBILITY.md).
 
-[Usage](docs/user/USAGE.md), [Build instructions](docs/dev/BUILD.md), [Architecture](docs/dev/ARCHITECTURE.md), [Technical debt of the project](docs/dev/TechnicalDebt.md), [code style conventions](docs/dev/CONVENTIONS.md), [contributing](CONTRIBUTING.md)
+## Start here
 
-## Status
+| Goal | Read |
+| --- | --- |
+| Convert and run an application | [Getting started](docs/user/GETTING_STARTED.md) |
+| Build the project | [Build instructions](docs/dev/BUILD.md) |
+| Make a first contribution | [Development workflow](docs/dev/DEVELOPMENT.md) and [Contributing](CONTRIBUTING.md) |
+| Understand the code | [Repository map](docs/dev/REPOSITORY_MAP.md) and [Architecture](docs/dev/ARCHITECTURE.md) |
+| Diagnose a failure | [Troubleshooting](docs/user/TROUBLESHOOTING.md) |
+| Work with a coding agent | [AGENTS.md](AGENTS.md) |
 
-[![libraries](https://boykopovar.github.io/AnyPS5/badge-libraries.svg)](https://boykopovar.github.io/AnyPS5/) [![shaders](https://boykopovar.github.io/AnyPS5/badge-shaders.svg)](https://boykopovar.github.io/AnyPS5/)
+The [documentation index](docs/README.md) links every maintained guide.
+
+## Quick start: conversion tool
+
+From a Git checkout with CMake 3.22.1+, Ninja, a C++20 compiler and Python 3:
+
+```sh
+cmake --preset relinker
+cmake --build --preset relinker
+ctest --preset relinker
+```
+
+This dependency-free build works on Linux, Windows and macOS, including Apple
+Silicon. Output is still x86-64 Linux ELF or Windows PE. It does not supply
+system libraries or macOS game execution. See the
+[full build](docs/dev/BUILD.md#full-build) for native libraries and graphics tests.
+
+```sh
+./build-relinker/core/relinker/relinker source/input.elf app.elf
+./build-relinker/core/relinker/relinker --windows source/input.elf app.exe
+```
+
+Prepare input module directories and runtime resources as described in
+[Getting started](docs/user/GETTING_STARTED.md). Windows uses `relinker.exe`;
+add `--to-intel` for an Intel runtime host. The `libs` target must be built
+separately for a full runtime.
+
+## Project layout
+
+```text
+core/relinker/          ELF parsing, CPU lowering, native ELF/PE output
+core/libs/prx/          Native system APIs and Vulkan graphics driver
+core/libs/nid/          Export-name patching to guest NIDs
+core/shader/recompiler/ RDNA decoding, IR, optimization, SPIR-V output
+core/Decoder/           JPEG and PNG decoders
+3rdparty/               Pinned dependency submodules
+tools/                  Documentation/conventions checks, progress, releases, oracle
+docs/                   User and developer guides
+.github/               CI, release workflows and contribution templates
+```
+
+See the [repository map](docs/dev/REPOSITORY_MAP.md) for entry points and tests.
+
+## Status and controls
+
+[![libraries](https://boykopovar.github.io/AnyPS5/badge-libraries.svg)](https://boykopovar.github.io/AnyPS5/)
+[![shaders](https://boykopovar.github.io/AnyPS5/badge-shaders.svg)](https://boykopovar.github.io/AnyPS5/)
 
 [![progress map](https://boykopovar.github.io/AnyPS5/progress.svg)](https://boykopovar.github.io/AnyPS5/)
 
-<sub>* System libraries: percentage of the functions known to the project so far (declared in [core/libs/prx](core/libs/prx)), not of every PS5 system function. The total grows as more functions are declared.</sub>
+These upstream progress reports count functions/instructions known to the
+project, not all system APIs, verified behavior or playable titles. See
+[Progress reporting](docs/dev/PROGRESS.md) for their interpretation and
+[Technical debt](docs/dev/TechnicalDebt.md) for known gaps.
 
-[List of verified games](docs/user/COMPATIBILITY.md)
+SDL-mapped controllers and configurable keyboard/mouse input are supported.
+See [Input mapping](docs/user/INPUT_MAPPING.md). Runtime paths, fonts, GPU
+selection and all CLI options are documented in [Usage](docs/user/USAGE.md).
 
-Dreaming Sarah (2D platformer) runs at a stable 60 fps on a GTX 1050 Ti / i5-7500 3.4GHz.
+## Contributing
 
-Unsupported or unexpected states strictly throw `std::runtime_error`. `what()` is printed to stderr and the process terminates.
-
-The [shader recompiler](core/shader/recompiler/Recompiler.cpp) successfully produces SPIR-V (validated via [Spirv-Tools](3rdparty/SPIRV-Tools) when built with `ANYPS5_ENABLE_SPIRV_TOOLS`).
-
-## Compatibility
-
-See the [game compatibility list](docs/user/COMPATIBILITY.md) for tested games and known issues.
-
-## Input mapping
-
-SDL-mapped game controllers are supported, including analog sticks and triggers. Keyboard and mouse controls can be configured with an `anyps5-input.ini` file. See [input mapping](docs/user/INPUT_MAPPING.md) for the supported devices and configuration format.
+Follow [Contributing](CONTRIBUTING.md) for implementation and review rules.
+Use [Testing](docs/dev/TESTING.md) to select checks. Maintained agent guidance
+lives in the root and subsystem `AGENTS.md` files. Bug reports should include a
+minimal reproduction, the first failure and host/build details; use the
+[bug report form](.github/ISSUE_TEMPLATE/bug_report.yml).
 
 ## Disclaimer
 
-This project is intended for interoperability, research, preservation, and compatibility purposes. It does not include, distribute, or require copyrighted software, firmware, cryptographic keys, or proprietary libraries. Users are responsible for ensuring that any binaries used with this project are obtained and used in accordance with applicable laws and their respective license terms.
+This project is intended for interoperability, research, preservation, and
+compatibility purposes. It does not include, distribute, or require copyrighted
+software, firmware, cryptographic keys, or proprietary libraries. Users are
+responsible for ensuring that any binaries used with this project are obtained
+and used in accordance with applicable laws and their respective license terms.
 
 ## License
 
-This project is licensed under the GNU General Public License version 2 only.
+[GNU General Public License version 2 only](LICENSE).
