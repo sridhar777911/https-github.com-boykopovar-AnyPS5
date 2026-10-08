@@ -241,4 +241,79 @@ int APS5_VABI sceHttp2SetRequestNoContentLength(int id) {
     return 0;
 }
 
+int APS5_VABI sceHttp2WebSocketCreateRequest(int tmpl_id, const char* url, uint32_t option) {
+    (void)tmpl_id;
+    (void)url;
+    (void)option;
+    return g_nextHandle.fetch_add(1, std::memory_order_relaxed);
+}
+
+int APS5_VABI sceHttp2WebSocketSendTextMessage(int req_id, const char* message, size_t size) {
+    (void)req_id;
+    (void)message;
+    (void)size;
+    return ERROR_NETWORK;
+}
+
+int APS5_VABI sceHttp2WebSocketSendTextMessageAsync(int req_id, const char* message, size_t size, void* kqueue_option, void* option) {
+    (void)req_id;
+    (void)message;
+    (void)size;
+    (void)kqueue_option;
+    (void)option;
+    return ERROR_NETWORK;
+}
+
+int APS5_VABI sceHttp2WebSocketSendDataMessage(int req_id, const void* data, size_t size) {
+    (void)req_id;
+    (void)data;
+    (void)size;
+    return ERROR_NETWORK;
+}
+
+int APS5_VABI sceHttp2WebSocketSendDataMessageAsync(int req_id, const void* data, size_t size, void* kqueue_option, void* option) {
+    (void)req_id;
+    (void)data;
+    (void)size;
+    (void)kqueue_option;
+    (void)option;
+    return ERROR_NETWORK;
+}
+
+int APS5_VABI sceHttp2WebSocketClose(int req_id, int reason, const char* message, size_t size) {
+    (void)req_id;
+    (void)reason;
+    (void)message;
+    (void)size;
+    return 0;
+}
+
+int APS5_VABI sceHttp2WebSocketCloseAsync(int req_id, int reason, const char* message, size_t size, void* kqueue_option, void* option) {
+    (void)req_id;
+    (void)reason;
+    (void)message;
+    (void)size;
+    (void)kqueue_option;
+    (void)option;
+    return 0;
+}
+
+int APS5_VABI sceHttp2WebSocketSetPingInterval(int id, uint32_t usec) {
+    (void)id;
+    (void)usec;
+    return 0;
+}
+
+int APS5_VABI sceHttp2WebSocketSetPingTimeout(int id, uint32_t usec) {
+    (void)id;
+    (void)usec;
+    return 0;
+}
+
+int APS5_VABI sceHttp2WebSocketSetCloseTimeout(int id, uint32_t usec) {
+    (void)id;
+    (void)usec;
+    return 0;
+}
+
 }
