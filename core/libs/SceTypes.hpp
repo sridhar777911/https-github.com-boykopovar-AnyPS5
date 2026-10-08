@@ -1219,6 +1219,7 @@ using NetCtlCallback = void (*)(int, void*);
 struct HttpEpoll {};
 using HttpEpollHandle = HttpEpoll*;
 using HttpsCallback = int (*)(int, unsigned int, void* const*, int, void*);
+using HttpAuthInfoCallback = int (*)(int, int, const char*, char*, char*, int, std::uint8_t**, std::uint64_t*, int*, void*);
 
 struct HttpNBEvent { std::uint8_t opaque[64]; };
 
