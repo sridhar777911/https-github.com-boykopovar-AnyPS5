@@ -667,6 +667,8 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> CommittedRanges(std::uint64
 namespace {
 
 constexpr std::size_t WriteBlockBytes = 65536;
+constexpr std::size_t WritePageBytes = 4096;
+constexpr std::size_t WritePagesPerBlock = WriteBlockBytes / WritePageBytes;
 
 enum class StampKind : std::uint8_t { Cpu, Driver, ImportWindow };
 
@@ -770,6 +772,24 @@ struct WriteTracker {
         std::array<DriverPiece, 4> pieces{};
     };
     std::unordered_map<std::uint64_t, DriverPieces> driverPieces;
+
+    struct CpuPages {
+        std::array<std::uint32_t, WritePagesPerBlock> pages{};
+    };
+    std::unordered_map<std::uint64_t, CpuPages> cpuPages;
+
+    void noteCpuStore(std::uint64_t begin, std::uint64_t end, std::uint32_t stampGeneration) {
+        for (auto block = blockOf(begin); block <= blockOf(end - 1); ++block) {
+            const auto blockStart = blockBegin(block);
+            const auto from = std::max(begin, blockStart) - blockStart;
+            const auto to = std::min<std::uint64_t>(end, blockStart + WriteBlockBytes) - blockStart;
+            auto& entry = cpuPages[block];
+            for (auto page = from / WritePageBytes; page <= (to - 1) / WritePageBytes; ++page) {
+                auto& stamp = entry.pages[page];
+                stamp = std::max(stamp, stampGeneration);
+            }
+        }
+    }
 
     void noteDriverStore(std::uint64_t block, std::uint64_t address, std::uint64_t end, std::uint32_t stampGeneration) {
         const auto begin = blockBegin(block);
@@ -894,6 +914,7 @@ void stampWrittenRun(void* context, std::uintptr_t begin, std::uintptr_t end) {
     auto& [tracker, kind] = *static_cast<StampRuns*>(context);
     if (end <= begin) return;
     const auto generation = tracker.generation.load(std::memory_order_relaxed);
+    if (kind != StampKind::Driver) tracker.noteCpuStore(begin, end, generation);
     for (auto block = tracker.blockOf(begin); block <= tracker.blockOf(end - 1); ++block) tracker.stamp(block, generation, kind);
     collectDirtyRuns.fetch_add(1, std::memory_order_relaxed);
 }
@@ -918,7 +939,11 @@ bool walkWrites(WriteTracker& tracker, std::uint64_t first, std::uint64_t stop, 
             return false;
         }
         if (count != 0) dirty = true;
-        for (ULONG_PTR i = 0; i < count; ++i) tracker.stamp(tracker.blockOf(reinterpret_cast<std::uintptr_t>(tracker.pages[i])), tracker.generation, kind);
+        for (ULONG_PTR i = 0; i < count; ++i) {
+            const auto page = reinterpret_cast<std::uintptr_t>(tracker.pages[i]);
+            tracker.stamp(tracker.blockOf(page), tracker.generation, kind);
+            if (kind != StampKind::Driver) tracker.noteCpuStore(page, page + WritePageBytes, tracker.generation);
+        }
         if (count < tracker.pages.size()) break;
         cursor = reinterpret_cast<std::uintptr_t>(tracker.pages[count - 1]) + (granularity != 0 ? granularity : page);
     }
@@ -930,7 +955,11 @@ bool walkWrites(WriteTracker& tracker, std::uint64_t first, std::uint64_t stop, 
             std::size_t count = tracker.pages.size();
             DWORD granularity = 4096;
             if (!GuestArena::GuestArenaCollectWrites_nid_postfix(cursor, static_cast<std::size_t>(stop - cursor), tracker.pages.data(), &count, true)) return false;
-            for (ULONG_PTR i = 0; i < count; ++i) tracker.stamp(tracker.blockOf(reinterpret_cast<std::uintptr_t>(tracker.pages[i])), tracker.generation, kind);
+            for (ULONG_PTR i = 0; i < count; ++i) {
+                const auto page = reinterpret_cast<std::uintptr_t>(tracker.pages[i]);
+                tracker.stamp(tracker.blockOf(page), tracker.generation, kind);
+                if (kind != StampKind::Driver) tracker.noteCpuStore(page, page + WritePageBytes, tracker.generation);
+            }
             if (count < tracker.pages.size()) break;
             cursor = reinterpret_cast<std::uintptr_t>(tracker.pages[count - 1]) + (granularity != 0 ? granularity : page);
         }
@@ -1154,7 +1183,16 @@ bool StoredOver(std::uint64_t address, std::size_t bytes, std::uint64_t generati
     const auto last = tracker.blockOf(end - 1);
     for (auto block = first; block <= last; ++block) {
         if (tracker.writtenStampOf(block) <= generation) continue;
-        if (tracker.cpuStampOf(block) > generation) return true;
+        if (tracker.cpuStampOf(block) > generation) {
+            const auto begin = tracker.blockBegin(block);
+            const auto from = std::max(address, begin) - begin;
+            const auto to = std::min<std::uint64_t>(end, begin + WriteBlockBytes) - begin;
+            const auto found = tracker.cpuPages.find(block);
+            if (found == tracker.cpuPages.end()) return true;
+            for (auto page = from / WritePageBytes; page <= (to - 1) / WritePageBytes; ++page) {
+                if (found->second.pages[page] > generation) return true;
+            }
+        }
         const auto found = tracker.driverPieces.find(block);
         if (found == tracker.driverPieces.end()) return true;
         const auto& entry = found->second;

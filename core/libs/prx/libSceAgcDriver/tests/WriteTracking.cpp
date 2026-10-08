@@ -83,7 +83,7 @@ void CheckSharedBlock() {
     const auto beforeCpu = CollectWrites(base, 3 * Block);
     static_cast<volatile std::uint8_t*>(memory)[Block + 8] = 0x22;
     CollectWritesUncached(base, 3 * Block);
-    Require(StoredOver(boundary, static_cast<std::size_t>(sharedSecond), beforeCpu), "a CPU store in the shared block is not seen");
+    Require(!StoredOver(boundary, static_cast<std::size_t>(sharedSecond), beforeCpu), "a CPU store outside the shared range counts for it");
 
     std::array<std::uint8_t, 64> unwatched{};
     const auto outside = reinterpret_cast<std::uint64_t>(unwatched.data());
