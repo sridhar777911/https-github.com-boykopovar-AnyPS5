@@ -505,6 +505,8 @@ void reportResultMemo() {
     std::fprintf(stderr, "[recompile] result memo (10 s): %llu hits, %llu misses (%.1f%% hits), Populate %.1f us per miss / %.1f ms in total, %llu evictions\n", static_cast<unsigned long long>(hits), static_cast<unsigned long long>(misses), hits + misses != 0 ? 100.0 * static_cast<double>(hits) / static_cast<double>(hits + misses) : 0.0, misses != 0 ? static_cast<double>(populate) / 1000.0 / static_cast<double>(misses) : 0.0, static_cast<double>(populate) / 1e6, static_cast<unsigned long long>(evictions));
 }
 
+}
+
 // Everything materializeResult reads besides the variant: the snapshot (the descriptor words, the
 // flattened SRT, the user data, the uniform fill) and, for the vertex family, the V# table the
 // attributes are resolved from.
@@ -549,6 +551,8 @@ std::uint64_t snapshotHash(const RecompileRequest& request, const ResourceSnapsh
     return hash;
 }
 
+namespace {
+
 // The memo'd result of `source`'s variant for the snapshot (design13 R5): a hit returns the shared
 // object, a miss materializes outside the source mutex and inserts (a concurrent miss's object is
 // as good). `memoHit` reports the hit.
@@ -581,16 +585,18 @@ std::shared_ptr<const RecompileResult> materializeMemoized(SourceEntry& source, 
     {
         std::lock_guard lock(source.mutex);
         const auto found = source.memoIndex.find(index);
+        bool hit = false;
         if (found != source.memoIndex.end()) {
             if (found->second->variantId == variant->result.variantId && found->second->hash == hash) {
                 source.memo.splice(source.memo.begin(), source.memo, found->second);
                 shared = found->second->result;
+                hit = true;
             } else {
                 source.memo.erase(found->second);
                 source.memoIndex.erase(found);
             }
         }
-        if (source.memoIndex.find(index) == source.memoIndex.end()) {
+        if (!hit) {
             source.memo.push_front({variant->result.variantId, hash, shared});
             source.memoIndex.emplace(index, source.memo.begin());
             while (source.memo.size() > ResultMemoEntries) {
