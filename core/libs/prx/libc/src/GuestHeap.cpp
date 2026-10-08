@@ -22,6 +22,8 @@
 namespace GuestHeap {
 namespace {
 
+constexpr std::uint32_t ReadWriteProtection = 0x04;
+
 // Each block is preceded by a header holding the raw block address and its size in bytes.
 constexpr std::size_t HeaderBytes = 2 * sizeof(void*);
 constexpr std::size_t MinimumAlignment = 16;
@@ -106,12 +108,7 @@ private:
     }
 
     static void commit(void* pointer, std::size_t bytes) {
-#ifdef _WIN32
-        GuestArena::GuestArenaCommit_nid_postfix(pointer, bytes, PAGE_READWRITE, bytes);
-#else
-        (void)pointer;
-        (void)bytes;
-#endif
+        GuestArena::GuestArenaCommit_nid_postfix(pointer, bytes, ReadWriteProtection, bytes);
     }
 
     // Freed large blocks stay committed and are handed out again for the same block size: the game
@@ -164,10 +161,8 @@ private:
         }
 
         static void release(void* raw, std::size_t bytes) {
-#ifdef _WIN32
             GuestArena::GuestArenaReset_nid_postfix(raw, bytes);
             GuestAllocations::GuestAllocationsInvalidate_nid_postfix(reinterpret_cast<std::uintptr_t>(raw), bytes);
-#endif
             GuestArena::GuestArenaRelease_nid_postfix(raw, bytes);
         }
 
