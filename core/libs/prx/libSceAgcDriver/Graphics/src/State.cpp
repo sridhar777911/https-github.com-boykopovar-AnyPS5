@@ -234,7 +234,7 @@ std::uint32_t effectiveDepthControl(std::uint32_t depthControl) {
 }
 
 bool colorControlSupported(std::uint32_t colorControl, bool hasColorTarget) {
-    return colorControl == 0xcc0010u || (!hasColorTarget && (colorControl & ~0x70u) == 0xcc0000u);
+    return colorControl == 0xcc0010u || ((colorControl >> 4u) & 7u) == 0u || (!hasColorTarget && (colorControl & ~0x70u) == 0xcc0000u);
 }
 
 std::string colorControlMessage(std::uint32_t colorControl) {
@@ -523,6 +523,7 @@ State DecodeState(const QueueState& queue) {
     for (std::uint32_t index = 0; index < exportSlots.size(); ++index) {
         if (written(exportSlots[index])) exportCount = index + 1;
     }
+    if (((read(cx, 0x202) >> 4u) & 7u) == 0u) exportCount = 0;
     result.hasColorTarget = exportCount != 0;
     APS5_LOG_OUT_DEBUG("hasColorTarget=%u exports=%u", result.hasColorTarget ? 1u : 0u, exportCount);
 
