@@ -92,6 +92,9 @@ void StopBdaInvocationIf(SpirvEmitterState& state, std::uint32_t condition) {
     if (state.bdaStopValue != 0) {
         state.module.AddFunction(spv::OpReturnValue, state.bdaStopValue);
     } else {
+        if (OrderedPixelShader(state)) {
+            state.module.AddFunction(spv::OpEndInvocationInterlockEXT);
+        }
         state.module.AddFunction(state.program.Resources().stage == IrShaderStage::Pixel ? spv::OpKill : spv::OpReturn);
     }
     EmitLabel(state, next);

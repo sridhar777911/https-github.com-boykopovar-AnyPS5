@@ -126,6 +126,7 @@ struct ShaderPixelStageInfo {
     bool earlyZ;
     bool executeOnNoop;
     ConservativeZExport conservativeZExport;
+    bool orderedPixelShader;
     std::array<std::uint8_t, 8> targetOutputMode;
     std::array<std::uint8_t, 8> targetExportMapping;
 };

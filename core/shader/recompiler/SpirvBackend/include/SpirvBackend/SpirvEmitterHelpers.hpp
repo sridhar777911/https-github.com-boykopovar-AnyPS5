@@ -90,6 +90,7 @@ DppTargetLane EmitDppRowRotateRightTargetLane(SpirvEmitterState& state, std::uin
 DppTargetLane EmitDppMirrorTargetLane(SpirvEmitterState& state, std::uint32_t subid, bool halfRow);
 DppTargetLane EmitDppTargetLane(SpirvEmitterState& state, std::uint32_t control);
 std::uint32_t InputVariableForKind(const SpirvEmitterState& state, StageInputKind kind);
+bool OrderedPixelShader(const SpirvEmitterState& state);
 const SpirvInputBinding* SpirvInputBindingForParameter(const SpirvEmitterState& state, std::uint32_t location);
 std::uint32_t EmitVertexParameterComponentU32(SpirvEmitterState& state, const SpirvInputBinding& input, std::uint32_t component);
 std::uint32_t EmitInputComponentU32(SpirvEmitterState& state, StageInputKind kind, std::uint32_t component);
