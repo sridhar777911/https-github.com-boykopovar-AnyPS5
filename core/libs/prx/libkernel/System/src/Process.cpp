@@ -13,6 +13,7 @@
 #include "prx/libc/include/ApplicationHeap.hpp"
 #include "prx/libc/include/Shutdown.hpp"
 #include "prx/libkernel/DirectMemory/DirectMemory.hpp"
+#include "prx/libkernel/Pthread/include/Pthread.hpp"
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -143,6 +144,8 @@ struct GuestResourceUsage {
     std::int64_t ru_nivcsw;
 };
 
+extern "C" Pthread APS5_VABI scePthreadSelf();
+
 extern "C" {
 
 // unknown data
@@ -190,13 +193,13 @@ int APS5_VABI sceKernelGetCurrentCpu(void) {
             throw std::system_error(GetLastError(), std::system_category(), "Reading processor group size");
         index += count;
     }
-    return static_cast<int>(index);
 #else
     const int cpu = ::sched_getcpu();
     if (cpu < 0)
         throw std::system_error(errno, std::generic_category(), "Reading current processor");
-    return cpu;
+    const auto index = static_cast<unsigned>(cpu);
 #endif
+    return GuestCpuFromHost(index, scePthreadSelf()->affinity.load(std::memory_order_relaxed));
 }
 
 std::uint64_t APS5_VABI sceKernelGetGPI(void) {
