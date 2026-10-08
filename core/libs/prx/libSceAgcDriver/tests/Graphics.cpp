@@ -7,6 +7,7 @@
 #include "prx/libSceAgcDriver/Graphics/include/ShaderInputState.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DccMetadata.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Texture.hpp"
+#include "SceShaders.hpp"
 #include "ControlFlow/RequestSerializer.hpp"
 #include "CacheKey.hpp"
 #include <spirv/unified1/spirv.hpp>
@@ -474,6 +475,34 @@ std::vector<std::uint32_t> pixelNoPerspectiveLocations(bool barycentricEnabled) 
     std::vector<std::uint32_t> result2;
     for (const auto id : noPerspective) result2.push_back(locations.count(id) != 0 ? locations.at(id) : 0xffffffffu);
     return result2;
+}
+
+void ComputeScratchTests() {
+    auto queue = makeState();
+    auto& shader = queue.shader;
+    shader[0x207] = 64u;
+    shader[0x208] = 1u;
+    shader[0x209] = 1u;
+    shader[0x213] = 0x1u;
+    std::vector<std::byte> header(sizeof(Shader));
+    Shader agc{};
+    agc.scratch_size_dw_per_thread = 24;
+    std::memcpy(header.data(), &agc, sizeof(Shader));
+    const auto compute = AgcDriver::Graphics::DecodeComputeStageInfo(shader, header);
+    Require(compute.scratchDwords == 24u, "SCRATCH_EN did not take the AGC header's per-thread scratch size");
+    agc.scratch_size_dw_per_thread = 0;
+    std::memcpy(header.data(), &agc, sizeof(Shader));
+    expectFailure([&] { static_cast<void>(AgcDriver::Graphics::DecodeComputeStageInfo(shader, header)); }, "zero scratch size");
+    shader[0x213] = 0u;
+    Require(AgcDriver::Graphics::DecodeComputeStageInfo(shader, {}).scratchDwords == 0u, "a dispatch without SCRATCH_EN got scratch");
+    ShaderRecompiler::RecompileRequest request{};
+    const std::array<std::uint32_t, 1> code{0xbf810000u};
+    request.shader = {ShaderRecompiler::ShaderStage::Compute, 0x30000u, code, 0, {}};
+    request.context.waveSize = 64;
+    request.context.compute = compute;
+    const ShaderRecompiler::RequestSerializer serializer;
+    const auto back = serializer.Deserialize(serializer.Serialize(request));
+    Require(back.request.context.compute->scratchDwords == 24u, "the compute scratch size did not survive serialization");
 }
 
 void PixelInputLayoutTests() {
@@ -2302,6 +2331,7 @@ int main() {
         cmaskTests();
         ShaderStageTests();
         PixelInputLayoutTests();
+        ComputeScratchTests();
         InitialContextTests();
         pushConstantTests();
         resourceTests();

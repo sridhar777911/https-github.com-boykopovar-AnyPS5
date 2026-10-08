@@ -68,7 +68,7 @@ template <typename T> void _readHeaderArray(std::span<const std::byte> header, s
 
 }
 
-ShaderRecompiler::ShaderComputeStageInfo DecodeComputeStageInfo(const Registers& shader) {
+ShaderRecompiler::ShaderComputeStageInfo DecodeComputeStageInfo(const Registers& shader, std::span<const std::byte> header) {
     const auto numThreadX = read(shader, computeNumThreadX, RegisterBank::Shader);
     const auto numThreadY = read(shader, computeNumThreadY, RegisterBank::Shader);
     const auto numThreadZ = read(shader, computeNumThreadZ, RegisterBank::Shader);
@@ -76,8 +76,13 @@ ShaderRecompiler::ShaderComputeStageInfo DecodeComputeStageInfo(const Registers&
         throw std::runtime_error("AGC graphics: COMPUTE_NUM_THREAD_X/Y/Z must be nonzero");
     }
     const auto rsrc2 = read(shader, computePgmRsrc2, RegisterBank::Shader);
+    std::uint32_t scratchDwords = 0;
     if ((rsrc2 & 0x1u) != 0) {
-        throw std::runtime_error("AGC graphics: COMPUTE_PGM_RSRC2.SCRATCH_EN is unsupported");
+        if (header.size() < sizeof(Shader)) throw std::runtime_error("AGC graphics: COMPUTE_PGM_RSRC2.SCRATCH_EN without an AGC shader header");
+        Shader agcShader;
+        std::memcpy(&agcShader, header.data(), sizeof(Shader));
+        scratchDwords = agcShader.scratch_size_dw_per_thread;
+        if (scratchDwords == 0) throw std::runtime_error("AGC graphics: COMPUTE_PGM_RSRC2.SCRATCH_EN with a zero scratch size");
     }
     // Debug aid: APS5_LDS_SLACK=<dwords> grows every dispatch's LDS allocation by that much, to tell
     // whether a program depends on addresses past its declared allocation.
@@ -87,7 +92,9 @@ ShaderRecompiler::ShaderComputeStageInfo DecodeComputeStageInfo(const Registers&
         std::min(((rsrc2 >> 15u) & 0x1FFu) * 128u + ldsSlack, 16384u),
         {((rsrc2 >> 7u) & 0x1u) != 0, ((rsrc2 >> 8u) & 0x1u) != 0, ((rsrc2 >> 9u) & 0x1u) != 0},
         ((rsrc2 >> 10u) & 0x1u) != 0,
-        ((rsrc2 >> 11u) & 0x3u) + 1u
+        ((rsrc2 >> 11u) & 0x3u) + 1u,
+        {},
+        scratchDwords
     };
 }
 
