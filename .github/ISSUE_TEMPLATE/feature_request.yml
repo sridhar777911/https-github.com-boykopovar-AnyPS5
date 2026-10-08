@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose general compatibility, developer tooling or documentation improvements.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the concrete limitation and who encounters it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the general behavior, scope and alternatives considered.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and validation
+      description: Relevant API/ISA sources, hardware results or proposed synthetic/homebrew tests. Do not attach proprietary binaries.

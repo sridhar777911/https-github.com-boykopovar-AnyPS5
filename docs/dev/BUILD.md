@@ -1,17 +1,40 @@
 # Build
 
+Choose a mode below. Shared [CMake presets](../../CMakePresets.json) provide
+`relinker`, `relinker-debug` and `full` configure/build/test commands with
+CMake 3.22.1+. See [Development workflow](DEVELOPMENT.md) for preset examples
+and [Troubleshooting](../user/TROUBLESHOOTING.md) for setup failures.
+
+## Relinker only
+
+The relinker can be built without initializing submodules or configuring SDL, Vulkan, FFmpeg, FreeType or the shader recompiler. It requires CMake, a C++20 compiler and a build tool. Python 3 enables the Python regression tests.
+
+```sh
+cmake -S . -B build-relinker -G Ninja -DCMAKE_BUILD_TYPE=Release -DANYPS5_RELINKER_ONLY=ON -DBUILD_TESTING=ON
+cmake --build build-relinker --parallel
+ctest --test-dir build-relinker --output-on-failure
+```
+
+This mode builds the conversion tool and its tests on Linux, Windows and macOS, including Apple Silicon. macOS uses AppleClang from the Xcode command-line tools; Windows uses the MinGW-w64 toolchain below. The executable is `build-relinker/core/relinker/relinker` (`relinker.exe` on Windows with Ninja).
+
+The output remains x86-64 Linux ELF or Windows PE. Converted games need system libraries built for the target OS and a compatible x86-64 host. This mode does not build those libraries or provide macOS game execution. Tests inspect both output formats; execution checks run only on their compatible hosts.
+
+Use a separate build directory for the full build.
+
+## Full build
+
 ```sh
 git submodule update --init --recursive
 ```
 
-## Requirements
+### Full-build requirements
 
 - x86-64, Git, CMake 3.22.1 or newer, Ninja, C++20.
 - Linux: GCC, G++, binutils. SDL's X11 backend requires X11 and Xext development headers (`libx11-dev` and `libxext-dev` on Debian/Ubuntu).
 - Windows: only MinGW-w64 GCC 15.2.0 (WinLibs `x86_64-ucrt-posix-seh`, release `15.2.0posix-14.0.0-ucrt-r7`) is currently supported. Add its `mingw64/bin` directory to `PATH` before configuring.
 - FFmpeg binaries are downloaded during configuration unless `FFMPEG_PREBUILT_DIR` is set. With the WinLibs CMake, the download fails with status 60 (`SSL peer certificate or SSH remote key was not OK`) unless `SSL_CERT_FILE` names a CA bundle, for example `C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt` from Git for Windows, as in CI.
 
-## Commands
+### Full-build commands
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
@@ -33,6 +56,7 @@ Project switches accept `ON` or `OFF`:
 | Flag                             | Default | Effect                                           |
 |----------------------------------|---------|--------------------------------------------------|
 | `-DBUILD_TESTING=ON`             | `OFF`   | Build and register tests.                        |
+| `-DANYPS5_RELINKER_ONLY=ON`      | `OFF`   | Build only the relinker and its tests, without third-party dependencies. |
 | `-DANYPS5_ENABLE_SPIRV_TOOLS=ON` | `OFF`   | Enable SPIR-V validation and optimization.       |
 | `-DAPS5_ENABLE_TIMING_LOG=ON`    | `OFF`   | Compile frame timing logging.                    |
 | `-DAPS5_AGC_CREATE_LOG=OFF`      | `ON`    | Disable successful `sceAgcCreateShader` logging. |

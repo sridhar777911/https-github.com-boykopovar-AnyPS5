@@ -1,5 +1,9 @@
 # Contributing
 
+Start with the [development workflow](docs/dev/DEVELOPMENT.md) and
+[repository map](docs/dev/REPOSITORY_MAP.md). Automated contributors also read
+[AGENTS.md](AGENTS.md) and the guidance in the directories they change.
+
 ## Code
 
 - Follow the [coding conventions](docs/dev/CONVENTIONS.md): naming, no comments except [technical debt](docs/dev/TechnicalDebt.md), Conventional Commits.
@@ -18,15 +22,29 @@
 
 Toolchains are listed in the [build instructions](docs/dev/BUILD.md).
 
+For relinker changes, use the [relinker-only build](docs/dev/BUILD.md#relinker-only) to build and test without third-party submodules, system libraries or a GPU. It also works on macOS. Changes to system libraries or shaders still need the full build and relevant runtime tests.
+
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build
+cmake --build build --target libs
 ctest --test-dir build --output-on-failure
 ```
 
-Python 3 is optional; without it some relinker tests are not registered.
+Python 3 is optional for building; without it Python regression tests are not
+registered. See [Testing](docs/dev/TESTING.md) for scope and GPU requirements.
+For current documentation and tooling changes, run:
 
-The Conventions check runs on every pull request and fails when a rule on this page is broken. It accepts code comments only when the pull request also changes [TechnicalDebt](docs/dev/TechnicalDebt.md), and only UTF-8 text files. Run it locally before pushing:
+```sh
+python3 tools/check_docs.py
+python3 -m unittest discover -s tools/tests -p 'test_*.py'
+```
+
+The Conventions check runs on every pull request and enforces the rules on this
+page. It accepts code comments only when the pull request also changes
+[TechnicalDebt](docs/dev/TechnicalDebt.md), and only UTF-8 text files. It compares
+committed revisions and does not inspect working-tree edits. Run it locally
+against the intended PR base after committing and before pushing:
 
 ```
 python3 tools/check_conventions.py --base origin/main
@@ -46,4 +64,16 @@ The [pull request template](.github/pull_request_template.md) is the checklist f
 
 ## Documentation
 
-Text in the repository is dry, strict and concise. Record known gaps, unknown NIDs and signatures in [technical debt](docs/dev/TechnicalDebt.md) instead of new files.
+Keep documentation concise, factual and grounded in source. Add durable user or
+developer guides under `docs/user/` or `docs/dev/` and link them from
+[docs/README.md](docs/README.md). Root `README.md`, `CONTRIBUTING.md`, `AGENTS.md`
+and the `AGENT.md` pointer are maintained entry points. Scoped `AGENTS.md` files
+are allowed under `core/`, `tools/`, `docs/` and `.github/`; keep their rules
+specific to the owning subsystem. Do not add alternate agent instruction files
+or transient investigation reports.
+
+Record known gaps, unknown NIDs and signatures in
+[technical debt](docs/dev/TechnicalDebt.md). Update affected docs with behavior
+changes. Run `python3 tools/check_docs.py` to validate current local links and
+heading fragments. See [Maintenance](docs/dev/MAINTENANCE.md) for CI and release
+responsibilities.

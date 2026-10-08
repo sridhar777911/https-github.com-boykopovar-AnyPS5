@@ -98,6 +98,8 @@ downloads/
 *.png
 
 *.json
+!CMakePresets.json
+CMakeUserPresets.json
 !demo/web/i18n/*.json
 
 !/assets/*.jpg

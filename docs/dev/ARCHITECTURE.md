@@ -67,3 +67,10 @@ flowchart LR
 
 - [`Recompiler.cpp`](../../core/shader/recompiler/Recompiler.cpp) runs the stages in this order. With `ANYPS5_ENABLE_SPIRV_TOOLS`, the SPIR-V is also validated and optimized with SPIRV-Tools.
 - `ShaderRecompiler::Recompile` keeps compiled variants in memory, and `ShaderDiskCache` stores them on disk so later runs reuse them.
+
+## Implementation entry points
+
+The [repository map](REPOSITORY_MAP.md) links the source entry points and test
+locations. [Testing](TESTING.md) distinguishes conversion, native execution,
+SPIR-V validation and hardware measurements. [Technical debt](TechnicalDebt.md)
+records gaps in the current implementation.

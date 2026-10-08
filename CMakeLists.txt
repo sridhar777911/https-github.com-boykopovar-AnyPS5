@@ -9,6 +9,7 @@ function(add_test_executable target)
 endfunction()
 
 option(BUILD_TESTING "Build and register relinker tests" OFF)
+option(ANYPS5_RELINKER_ONLY "Build the relinker without system libraries or third-party dependencies" OFF)
 if(BUILD_TESTING)
     enable_testing()
     if(MINGW)
@@ -29,7 +30,26 @@ add_compile_definitions(APS5_ENABLE_TIMING_LOG=$<BOOL:${APS5_ENABLE_TIMING_LOG}>
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++")
+if(NOT APPLE)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++")
+endif()
+
+if(BUILD_TESTING)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME progress_report COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_progress.py)
+        add_test(NAME documentation_links COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_docs.py)
+        add_test(NAME documentation_policy COMMAND ${Python3_EXECUTABLE}
+            -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tools/tests -p "test_*.py")
+    endif()
+endif()
+
+if(ANYPS5_RELINKER_ONLY)
+    add_subdirectory(core/relinker)
+    return()
+endif()
 
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
@@ -72,11 +92,3 @@ add_subdirectory(core/Decoder/Jpeg)
 add_subdirectory(core/Decoder/Png)
 add_subdirectory(core/libs)
 add_subdirectory(core/relinker)
-
-if(BUILD_TESTING)
-    find_package(Python3 QUIET COMPONENTS Interpreter)
-    if(Python3_Interpreter_FOUND)
-        add_test(NAME progress_report COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_progress.py)
-    endif()
-endif()
