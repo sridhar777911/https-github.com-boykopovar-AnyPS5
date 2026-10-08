@@ -203,6 +203,7 @@ enum class RdnaOpcode : std::uint16_t {
     SMovrelsd2B32,
     SQuadmaskB64,
     SGetpcB64,
+    SCallB64,
     SSubvectorLoopBegin,
     SSubvectorLoopEnd,
     SAndSaveexecB32,
