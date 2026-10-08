@@ -23,6 +23,8 @@ std::optional<DrawVerdict> Driver::precheckDraw(const QueueState& queue, const S
         localDevice->ColorMetadataPass(*pass);
         return DrawVerdict::Drawn;
     }
+    rejected = Graphics::DepthMaintenanceRejection(queue);
+    if (!rejected.empty()) return DrawVerdict::Rejected;
     static const bool traceIndirectEnabled = std::getenv("APS5_TRACE_INDIRECT_DRAWS") != nullptr;
     traceIndirect = traceIndirectEnabled;
     if (traceIndirect && drawParameters.indirect) std::fprintf(stderr, "[draw] indirect packet %s args 0x%llx count %u reached\n", Pm4::Name(packet[0]).c_str(), static_cast<unsigned long long>(drawParameters.indirect->arguments), drawParameters.indirect->count);

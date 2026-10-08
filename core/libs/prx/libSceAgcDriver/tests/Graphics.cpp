@@ -582,6 +582,31 @@ void DepthStencilTests() {
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "DCC 3D color targets");
 }
 
+void depthMaintenanceTests() {
+    for (const auto mode : {0x4u, 0x8u, 0x10u, 0x80u, 0x100u, 0x1000u, 0x4000u}) {
+        for (const auto clear : {0u, 1u, 2u, 3u}) {
+            auto queue = makeState();
+            queue.context[0x000] = mode | clear;
+            queue.context[0x200] = 0;
+            queue.context[0x8e] = 0;
+            queue.context[0x8f] = 0;
+            queue.shader.erase(0x8);
+            const auto reason = AgcDriver::Graphics::DepthMaintenanceRejection(queue);
+            Require(reason.find("DB_RENDER_CONTROL") != std::string::npos, "depth maintenance passed without depth tests or color writes");
+            Require(AgcDriver::Graphics::DrawRejection(queue, false) == reason, "draw precheck did not reject depth maintenance first");
+            expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, reason);
+        }
+    }
+    for (const auto control : {0u, 1u, 2u, 3u, 0x20u, 0x40u, 0x2000u, 0x2063u}) {
+        auto queue = makeState();
+        queue.context[0x000] = control;
+        Require(AgcDriver::Graphics::DepthMaintenanceRejection(queue).empty(), "ordinary depth controls were mistaken for maintenance");
+    }
+    auto absent = makeState();
+    absent.context.erase(0x000);
+    Require(AgcDriver::Graphics::DepthMaintenanceRejection(absent).empty(), "an absent depth control produced a maintenance verdict");
+}
+
 // SPI_SHADER_Z_FORMAT (0x1c4) and the export enables of DB_SHADER_CONTROL (0x203): Z export needs a
 // format with a depth channel (1, 2, 3 or 32_ABGR 9), the sample mask needs 32_ABGR, and the
 // formats the export path does not lay out are refused. A missing 0x1c4 gives no verdict here.
@@ -2138,6 +2163,7 @@ int main() {
             AgcDriver::Graphics::ValidateDepthBounds(unrestricted, bounded);
         }
         stateTests();
+        depthMaintenanceTests();
         hardwareScreenOffsetTests();
         DepthClipTests();
         DepthStencilTests();

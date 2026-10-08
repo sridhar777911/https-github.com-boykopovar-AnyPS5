@@ -429,7 +429,14 @@ ShaderStages DecodeShaderStages(const QueueState& queue) {
     return result;
 }
 
+std::string DepthMaintenanceRejection(const QueueState& queue) {
+    const auto control = find(queue.context, 0x000);
+    if (control == queue.context.end() || (control->second & ~0x2063u) == 0) return {};
+    return zeroMessage(0x000, control->second, "DB_RENDER_CONTROL depth copy, resummarize or decompress");
+}
+
 State DecodeState(const QueueState& queue) {
+    if (auto reason = DepthMaintenanceRejection(queue); !reason.empty()) throw std::runtime_error(reason);
     const auto& cx = queue.context;
     State result{};
     result.stages = DecodeShaderStages(queue);
@@ -743,6 +750,7 @@ std::optional<ColorMetadataPass> DecodeColorMetadataPass(const QueueState& queue
 }
 
 std::string DrawRejection(const QueueState& queue, bool indexed) {
+    if (auto reason = DepthMaintenanceRejection(queue); !reason.empty()) return reason;
     const auto& cx = queue.context;
     // A register a rule needs that is absent gives no verdict here: DecodeState reports it.
     const auto value = [&](const Registers& registers, std::uint32_t offset, std::uint32_t& out) {
