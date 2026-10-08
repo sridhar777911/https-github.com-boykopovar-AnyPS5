@@ -92,6 +92,10 @@ struct Port {
     std::uint64_t virtualQueueEnd = 0;
     SDL_AudioDeviceID device = 0;
     SDL_AudioSpec spec = {};
+    std::vector<std::uint8_t> prepareStorage{};
+    std::vector<std::uint8_t> convertStorage{};
+    SDL_AudioCVT cvt{};
+    int cvtResult = 0;
 };
 
 static std::mutex g_mutex;
@@ -107,6 +111,19 @@ static bool ensureSdlAudio() {
     }
     g_sdlInitialized = true;
     return true;
+}
+
+static void closeDevice(Port& port) {
+    if (port.device != 0 && SDL_WasInit(SDL_INIT_AUDIO) != 0) {
+        SDL_ClearQueuedAudio(port.device);
+        SDL_CloseAudioDevice(port.device);
+    }
+    port.device = 0;
+    port.spec = {};
+    port.cvt = {};
+    port.cvtResult = 0;
+    port.prepareStorage.clear();
+    port.convertStorage.clear();
 }
 
 static bool openDevice(Port& port) {
@@ -125,22 +142,22 @@ static bool openDevice(Port& port) {
         return false;
     }
     port.spec = obtained;
+    port.cvt = {};
+    port.cvtResult = SDL_BuildAudioCVT(
+        &port.cvt,
+        sdlFormat(port.format), static_cast<Uint8>(port.channels), static_cast<int>(port.freq),
+        port.spec.format, port.spec.channels, port.spec.freq);
+    if (port.cvtResult < 0) {
+        closeDevice(port);
+        throw std::runtime_error(std::string("SDL_BuildAudioCVT: ") + SDL_GetError());
+    }
     SDL_PauseAudioDevice(port.device, 0);
     return true;
 }
 
-static void closeDevice(Port& port) {
-    if (port.device != 0 && SDL_WasInit(SDL_INIT_AUDIO) != 0) {
-        SDL_ClearQueuedAudio(port.device);
-        SDL_CloseAudioDevice(port.device);
-    }
-    port.device = 0;
-    port.spec = {};
-}
-
 static constexpr std::uint32_t STD_8CH_MAP[8] = {0, 1, 2, 3, 6, 7, 4, 5};
 
-static const void* prepareBuffer(const Port& port, const void* data, std::vector<std::uint8_t>& buf) {
+static const void* prepareBuffer(Port& port, const void* data) {
     const auto frames = port.samplesNum;
     const auto ch = static_cast<std::uint32_t>(port.channels);
     const auto bps = bytesPerSample(port.format);
@@ -158,28 +175,37 @@ static const void* prepareBuffer(const Port& port, const void* data, std::vector
         return data;
     }
 
-    buf.resize(size);
+    if (port.prepareStorage.size() < size) {
+        port.prepareStorage.resize(size);
+    }
     const bool isStd = formatIsStd(port.format) && ch == 8;
 
     if (formatIsFloat(port.format)) {
-        auto* dst = reinterpret_cast<float*>(buf.data());
+        auto* dst = reinterpret_cast<float*>(port.prepareStorage.data());
         const auto* src = static_cast<const float*>(data);
         const float mixLevel = static_cast<float>(port.mixLevel) / static_cast<float>(DEFAULT_VOLUME);
+        float channelGains[8];
+        for (std::uint32_t c = 0; c < ch; c++) {
+            channelGains[c] = (static_cast<float>(port.volume[c]) / static_cast<float>(DEFAULT_VOLUME)) * mixLevel;
+        }
         for (std::uint32_t fr = 0; fr < frames; fr++) {
             for (std::uint32_t c = 0; c < ch; c++) {
                 const auto srcCh = isStd ? STD_8CH_MAP[c] : c;
-                dst[fr * ch + c] = src[fr * ch + srcCh] *
-                    (static_cast<float>(port.volume[c]) / static_cast<float>(DEFAULT_VOLUME)) * mixLevel;
+                dst[fr * ch + c] = src[fr * ch + srcCh] * channelGains[c];
             }
         }
     } else {
-        auto* dst = reinterpret_cast<std::int16_t*>(buf.data());
+        auto* dst = reinterpret_cast<std::int16_t*>(port.prepareStorage.data());
         const auto* src = static_cast<const std::int16_t*>(data);
+        std::int64_t channelMultipliers[8];
+        constexpr std::int64_t divisor = static_cast<std::int64_t>(DEFAULT_VOLUME) * DEFAULT_VOLUME;
+        for (std::uint32_t c = 0; c < ch; c++) {
+            channelMultipliers[c] = static_cast<std::int64_t>(port.volume[c]) * port.mixLevel;
+        }
         for (std::uint32_t fr = 0; fr < frames; fr++) {
             for (std::uint32_t c = 0; c < ch; c++) {
                 const auto srcCh = isStd ? STD_8CH_MAP[c] : c;
-                std::int64_t s = static_cast<std::int64_t>(src[fr * ch + srcCh]) *
-                    port.volume[c] * port.mixLevel / (static_cast<std::int64_t>(DEFAULT_VOLUME) * DEFAULT_VOLUME);
+                std::int64_t s = (static_cast<std::int64_t>(src[fr * ch + srcCh]) * channelMultipliers[c]) / divisor;
                 s = std::clamp(s,
                     static_cast<std::int64_t>(std::numeric_limits<std::int16_t>::min()),
                     static_cast<std::int64_t>(std::numeric_limits<std::int16_t>::max()));
@@ -187,7 +213,7 @@ static const void* prepareBuffer(const Port& port, const void* data, std::vector
             }
         }
     }
-    return buf.data();
+    return port.prepareStorage.data();
 }
 
 static void queueAudio(Port& port, const void* data) {
@@ -206,35 +232,26 @@ static void queueAudio(Port& port, const void* data) {
         return;
     }
 
-    std::vector<std::uint8_t> prepareBuf;
-    const void* prepared = prepareBuffer(port, data, prepareBuf);
+    const void* prepared = prepareBuffer(port, data);
     const std::uint32_t preparedSize = port.samplesNum *
         static_cast<std::uint32_t>(port.channels) * bytesPerSample(port.format);
 
-    SDL_AudioCVT cvt{};
-    const int cvtResult = SDL_BuildAudioCVT(
-        &cvt,
-        sdlFormat(port.format), static_cast<Uint8>(port.channels), static_cast<int>(port.freq),
-        port.spec.format, port.spec.channels, port.spec.freq);
-
-    if (cvtResult < 0) {
-        throw std::runtime_error(std::string("SDL_BuildAudioCVT: ") + SDL_GetError());
-    }
-
     const void* queueData = prepared;
     std::uint32_t queueSize = preparedSize;
-    std::vector<std::uint8_t> convertBuf;
 
-    if (cvtResult > 0) {
-        convertBuf.resize(static_cast<std::size_t>(preparedSize) * cvt.len_mult);
-        std::memcpy(convertBuf.data(), prepared, preparedSize);
-        cvt.buf = convertBuf.data();
-        cvt.len = static_cast<int>(preparedSize);
-        if (SDL_ConvertAudio(&cvt) < 0) {
+    if (port.cvtResult > 0) {
+        const std::size_t requiredConvertSize = static_cast<std::size_t>(preparedSize) * port.cvt.len_mult;
+        if (port.convertStorage.size() < requiredConvertSize) {
+            port.convertStorage.resize(requiredConvertSize);
+        }
+        std::memcpy(port.convertStorage.data(), prepared, preparedSize);
+        port.cvt.buf = port.convertStorage.data();
+        port.cvt.len = static_cast<int>(preparedSize);
+        if (SDL_ConvertAudio(&port.cvt) < 0) {
             throw std::runtime_error(std::string("SDL_ConvertAudio: ") + SDL_GetError());
         }
-        queueData = cvt.buf;
-        queueSize = static_cast<std::uint32_t>(cvt.len_cvt);
+        queueData = port.cvt.buf;
+        queueSize = static_cast<std::uint32_t>(port.cvt.len_cvt);
     }
 
     const std::uint64_t bufferUs = port.freq != 0
