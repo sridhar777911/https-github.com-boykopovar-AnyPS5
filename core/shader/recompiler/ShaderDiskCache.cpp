@@ -71,7 +71,7 @@ static_assert(sizeof(CompiledShaderInfo) == 304, "CompiledShaderInfo changed: up
 static_assert(sizeof(ShaderInfo) == 200, "ShaderInfo changed: update the info encoder");
 static_assert(sizeof(BufferResource) == 36, "BufferResource changed: update the info encoder");
 static_assert(sizeof(ImageResource) == 96, "ImageResource changed: update the info encoder");
-static_assert(sizeof(SamplerResource) == 12, "SamplerResource changed: update the info encoder");
+static_assert(sizeof(SamplerResource) == 16, "SamplerResource changed: update the info encoder");
 static_assert(sizeof(SampledResourcePair) == 12, "SampledResourcePair changed: update the info encoder");
 static_assert(sizeof(StageInput) == 56, "StageInput changed: update the info encoder");
 static_assert(sizeof(StageOutput) == 48, "StageOutput changed: update the info encoder");
@@ -427,6 +427,7 @@ void encodeInfo(Writer& writer, const CompiledShaderInfo& compiled) {
     writer.List(info.samplers, [](Writer& out, const SamplerResource& sampler) {
         out.Value(sampler.source);
         out.Value(sampler.firstUsePc);
+        out.Value(sampler.copyOf);
         out.Value(sampler.forcePointFiltering);
         out.Value(sampler.depthCompare);
         out.Value(sampler.uses);
@@ -517,9 +518,10 @@ void decodeInfo(Reader& reader, CompiledShaderInfo& compiled) {
         in.Value(image.indirectSearchIterations);
         in.Values(image.indirectResources);
     });
-    reader.List(info.samplers, 11, [](Reader& in, SamplerResource& sampler) {
+    reader.List(info.samplers, 15, [](Reader& in, SamplerResource& sampler) {
         in.Value(sampler.source);
         in.Value(sampler.firstUsePc);
+        in.Value(sampler.copyOf);
         in.Value(sampler.forcePointFiltering);
         in.Value(sampler.depthCompare);
         in.Value(sampler.uses);
