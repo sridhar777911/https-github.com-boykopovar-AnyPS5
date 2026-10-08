@@ -47,6 +47,7 @@ struct DecodedImage {
     bool depthUnorm16 = false;
     IrBufferFormat packedFormat = IrBufferFormat::Invalid;
     bool srgbDecode = false;
+    std::uint32_t constantSwizzle = 0;
 };
 
 ShaderBufferResource decodeBufferDescriptor(const DescriptorValue& value) {
@@ -196,6 +197,12 @@ DecodedImage decodeImageDescriptor(const DescriptorValue& descriptor, const Imag
         }
     } else if (decoded.numericClass == IrTextureNumericClass::Unsupported || (base.depthCompare && decoded.numericClass != IrTextureNumericClass::Float)) {
         throw std::runtime_error("sampled image descriptor uses an unsupported format");
+    }
+    const auto swizzle = descriptorImageSwizzle(descriptor);
+    const bool constantChannels = ((swizzle & 06666u) == 0u);
+    if (!storage && constantChannels && !base.depthCompare && !base.packed && !decoded.fmask && !decoded.depthBits && decoded.conversionFormat == IrBufferFormat::Invalid && !decoded.srgbDecode) {
+        decoded.constantSwizzle = 1u;
+        for (std::uint32_t channel = 0; channel < 4u; channel++) decoded.constantSwizzle |= ((swizzle >> (channel * 3u)) & 1u) << (channel + 1u);
     }
     return decoded;
 }
@@ -619,6 +626,7 @@ void buildResourceSpecialization(const IrResourcePlan& plan, ResourceSnapshot& s
         entry.depthUnorm16 = decoded.depthUnorm16;
         entry.packedFormat = decoded.packedFormat;
         entry.emulatedCompare = emulatedCompareState(plan, snapshot, i);
+        entry.constantSwizzle = decoded.constantSwizzle;
         entry.srgbDecode = decoded.srgbDecode;
         result.images.push_back(entry);
     }
@@ -708,6 +716,7 @@ void ResourceMaterializer::Apply(IrProgram& program, const ResourceSpecializatio
         image.depthUnorm16 = source.depthUnorm16;
         image.packedFormat = source.packedFormat;
         image.emulatedCompare = source.emulatedCompare;
+        image.constantSwizzle = source.constantSwizzle;
         image.srgbDecode = source.srgbDecode;
         if ((source.emulatedCompare & EmulatedCompare::Enabled) != 0u) image.depthCompare = false;
         image.indirectResources.clear();
@@ -1039,7 +1048,7 @@ bool ResourceSpecialization::Buffer::operator==(const Buffer& other) const {
 }
 
 bool ResourceSpecialization::Image::operator==(const Image& other) const {
-    return numericClass == other.numericClass && dimension == other.dimension && mipCount == other.mipCount && conversionFormat == other.conversionFormat && shaderSwizzle == other.shaderSwizzle && indirectRoot == other.indirectRoot && indirectMappingOffset == other.indirectMappingOffset && indirectSearchIterations == other.indirectSearchIterations && cube == other.cube && fmask == other.fmask && depthBits == other.depthBits && depthUnorm16 == other.depthUnorm16 && packedFormat == other.packedFormat && emulatedCompare == other.emulatedCompare && srgbDecode == other.srgbDecode;
+    return numericClass == other.numericClass && dimension == other.dimension && mipCount == other.mipCount && conversionFormat == other.conversionFormat && shaderSwizzle == other.shaderSwizzle && indirectRoot == other.indirectRoot && indirectMappingOffset == other.indirectMappingOffset && indirectSearchIterations == other.indirectSearchIterations && cube == other.cube && fmask == other.fmask && depthBits == other.depthBits && depthUnorm16 == other.depthUnorm16 && packedFormat == other.packedFormat && emulatedCompare == other.emulatedCompare && constantSwizzle == other.constantSwizzle && srgbDecode == other.srgbDecode;
 }
 
 bool ResourceSpecialization::operator==(const ResourceSpecialization& other) const {
