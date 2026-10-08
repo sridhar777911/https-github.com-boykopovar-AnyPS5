@@ -280,6 +280,27 @@ static void CheckReleaseDirectMemoryClearsMappings() {
     Require(sceKernelMunmap(mapped, page * 2) == 0);
 }
 
+static void CheckFixedMappingReplacesPartialOverlap() {
+    constexpr std::size_t page = 0x4000;
+    std::int64_t phys = 0;
+    Require(sceKernelAllocateDirectMemory(0, 0x7fffffffffll, page * 3, 0, 0, &phys) == 0);
+    void* reserved = nullptr;
+    Require(sceKernelMapDirectMemory(&reserved, page * 3, 3, 0, phys, 0) == 0);
+    Require(sceKernelMunmap(reserved, page * 3) == 0);
+    void* head = reserved;
+    Require(sceKernelMapDirectMemory(&head, page, 3, 0x10, phys, 0) == 0 && head == reserved);
+    void* fixed = reserved;
+    Require(sceKernelMapDirectMemory(&fixed, page * 3, 3, 0x10, phys, 0) == 0);
+    Require(fixed == reserved);
+    static_cast<unsigned char*>(fixed)[page * 2 + 7] = 0x5c;
+    VirtualQueryInfo info{};
+    Require(sceKernelVirtualQuery(fixed, 0, &info, sizeof(info)) == 0);
+    Require(info.is_direct && info.offset == static_cast<std::uint64_t>(phys));
+    Require(static_cast<unsigned char*>(fixed)[page * 2 + 7] == 0x5c);
+    Require(sceKernelMunmap(fixed, page * 3) == 0);
+    Require(sceKernelReleaseDirectMemory(phys, page * 3) == 0);
+}
+
 static void CheckGetDirectMemoryType() {
     constexpr std::size_t page = 0x4000;
     std::int64_t first = 0;
@@ -1043,6 +1064,7 @@ int main() {
     CheckAudioCoprocessorProtection();
     CheckDirectMemoryFollowsPhysicalPages();
     CheckReleaseDirectMemoryClearsMappings();
+    CheckFixedMappingReplacesPartialOverlap();
     CheckDirectMemoryGpuProtBits();
     CheckFixedVirtualReservation();
     CheckReservedRangeIsNotCommitted();
