@@ -202,6 +202,7 @@ private:
         append(key, value.tessellation);
         append(key, value.nonConstantImageOffsets);
         append(key, value.srgbDecodeFormats);
+        append(key, value.narrowSubgroupClock);
     }
 };
 
