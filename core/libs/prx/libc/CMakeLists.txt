@@ -4,6 +4,7 @@ target_sources(libc PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/specifics/gcc/StackGuard.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/specifics/windows/CrashReport.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/specifics/linux/DlIteratePhdr.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/specifics/macos/GuestImages.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/Strings.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/AllocatingStrings.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/WideConversion.cpp
@@ -253,11 +254,13 @@ if(BUILD_TESTING)
         target_include_directories(exception_runtime_tests PRIVATE ${LIBS_INCLUDE_DIR})
         target_link_libraries(exception_runtime_tests PRIVATE libc)
         add_test(NAME exception_runtime COMMAND exception_runtime_tests)
-        enable_language(C)
-        add_test_executable(exception_c_cleanup_tests ${LIBS_INCLUDE_DIR}/tests/ExceptionCCleanup.cpp ${LIBS_INCLUDE_DIR}/tests/ExceptionCCleanup.c)
-        set_source_files_properties(${LIBS_INCLUDE_DIR}/tests/ExceptionCCleanup.c PROPERTIES COMPILE_OPTIONS -fexceptions)
-        target_link_libraries(exception_c_cleanup_tests PRIVATE libc)
-        add_test(NAME exception_c_cleanup COMMAND exception_c_cleanup_tests)
+        if(NOT APPLE)
+            enable_language(C)
+            add_test_executable(exception_c_cleanup_tests ${LIBS_INCLUDE_DIR}/tests/ExceptionCCleanup.cpp ${LIBS_INCLUDE_DIR}/tests/ExceptionCCleanup.c)
+            set_source_files_properties(${LIBS_INCLUDE_DIR}/tests/ExceptionCCleanup.c PROPERTIES COMPILE_OPTIONS -fexceptions)
+            target_link_libraries(exception_c_cleanup_tests PRIVATE libc)
+            add_test(NAME exception_c_cleanup COMMAND exception_c_cleanup_tests)
+        endif()
     endif()
 endif()
 

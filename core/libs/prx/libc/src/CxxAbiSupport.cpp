@@ -4,7 +4,7 @@
 #define _UNWIND_H
 #endif
 
-#include <cxxabi.h>
+#include "prx/libc/include/specifics/itanium/CxxAbi.hpp"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>

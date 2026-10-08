@@ -11,6 +11,10 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <psapi.h>
+#elif defined(__APPLE__)
+#include <dlfcn.h>
+#include <mach-o/getsect.h>
+#include <mach-o/loader.h>
 #else
 #include <fstream>
 #endif
@@ -106,6 +110,51 @@ int APS5_VABI sceKernelGetModuleInfoForUnwind(uint64_t addr, int flags, ModuleIn
   path[len] = '\0';
   std::strncpy(info->name, path, sizeof(info->name) - 1);
   info->name[sizeof(info->name) - 1] = '\0';
+  return 0;
+#elif defined(__APPLE__)
+  struct Search {
+    std::uint64_t address;
+    ModuleInfoForUnwind* info;
+    bool found;
+  } search {addr, info, false};
+  dl_iterate_phdr([](dl_phdr_info* image, std::size_t, void* data) {
+    auto& search = *static_cast<Search*>(data);
+    const Elf64_Phdr* first = nullptr;
+    const Elf64_Phdr* frames = nullptr;
+    bool contains = false;
+    for (std::uint16_t index = 0; index < image->dlpi_phnum; ++index) {
+      const auto& header = image->dlpi_phdr[index];
+      const auto start = image->dlpi_addr + header.p_vaddr;
+      if (header.p_type == PT_LOAD && first == nullptr) first = &header;
+      if (header.p_type == PT_LOAD && search.address >= start && search.address - start < header.p_memsz) contains = true;
+      if (header.p_type == PT_GNU_EH_FRAME) frames = &header;
+    }
+    if (!contains) return 0;
+    auto* info = search.info;
+    info->st_size = sizeof(ModuleInfoForUnwind);
+    std::strncpy(info->name, image->dlpi_name != nullptr ? image->dlpi_name : "", sizeof(info->name) - 1);
+    info->name[sizeof(info->name) - 1] = '\0';
+    info->eh_frame_hdr_addr = frames != nullptr ? image->dlpi_addr + frames->p_vaddr : 0;
+    info->eh_frame_addr = 0;
+    info->eh_frame_size = 0;
+    info->seg0_addr = image->dlpi_addr + first->p_vaddr;
+    info->seg0_size = first->p_memsz;
+    search.found = true;
+    return 1;
+  }, &search);
+  if (search.found) return 0;
+  Dl_info image {};
+  if (!dladdr(reinterpret_cast<void*>(addr), &image) || image.dli_fbase == nullptr) return SCE_KERNEL_ERROR_ESRCH;
+  unsigned long textSize = 0;
+  getsegmentdata(static_cast<const mach_header_64*>(image.dli_fbase), "__TEXT", &textSize);
+  info->st_size = sizeof(ModuleInfoForUnwind);
+  std::strncpy(info->name, image.dli_fname != nullptr ? image.dli_fname : "", sizeof(info->name) - 1);
+  info->name[sizeof(info->name) - 1] = '\0';
+  info->eh_frame_hdr_addr = 0;
+  info->eh_frame_addr = 0;
+  info->eh_frame_size = 0;
+  info->seg0_addr = reinterpret_cast<std::uint64_t>(image.dli_fbase);
+  info->seg0_size = textSize;
   return 0;
 #else
   std::ifstream maps("/proc/self/maps");
