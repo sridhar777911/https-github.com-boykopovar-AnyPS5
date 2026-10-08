@@ -193,17 +193,7 @@ Throughout the project, every function at every stage either **does exactly what
 - [sceSaveDataInitialize3](../../core/libs/prx/libSceSaveData.native/Export.cpp) (libSceSaveData.native) - a repeated initialize succeeds: PPSA12544's executable and its Unity SaveData plugin both initialize, and the plugin fails on any error. Initializations are counted and `sceSaveDataTerminate` ends the session at the last one; how the console pairs them is unknown
 - [sceVoiceSetMuteFlag](../../core/libs/prx/libSceVoice/Export.cpp) (libSceVoice) - unknown signature
 - [sceTextToSpeech2GetSystemStatus](../../core/libs/prx/libSceTextToSpeech2/Export.cpp) (libSceTextToSpeech2) - unknown signature
-- [sceVdecswQueryComputeMemoryInfo](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswFinalizeDecodeSequence](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswQueryDecoderMemoryInfo](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswSetDecodeInput](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswReleaseComputeQueue](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswAllocateComputeQueue](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswGetAvcPictureInfo](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswTrySyncDecodeOutput](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswTrySyncDecodeInput](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswSetDecodeOutput](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
-- [sceVdecswResetDecoder](../../core/libs/prx/libSceVdecsw/Export.cpp) (libSceVdecsw) - unknown signature
+- [libSceVdecsw](../../core/libs/prx/libSceVdecsw/Export.cpp) - signatures, structure layouts and error codes follow [shadPS4](https://github.com/shadps4-emu/shadPS4/blob/main/src/core/libraries/videodec/vdecsw.cpp) (PS4), as does the NV12 layout (pitch aligned to 64, height to 16, padding rows repeat the last row). Only H.264 is decoded; an interlaced picture, a decoding error and input after `sceVdecswFinalizeDecodeSequence` without a reset throw. `sceVdecswSetDecodeInput` decodes before returning, so `sceVdecswTrySyncDecodeInput` never reports a pending decode. Work memory sizes are 16 MiB and the memory is not used. `sceVdecswGetAvcPictureInfo` fills timestamps, the IDR flag, profile, level, picture size and cropping (in 2-pixel units); the VUI, SEI and NAL presence fields are zero
 - [sceCoredumpAttachUserMemoryFile](../../core/libs/prx/libkernel/System/src/Coredump.cpp) (libkernel) - unknown signature
 - [sceCoredumpAttachMemoryRegion](../../core/libs/prx/libkernel/System/src/Coredump.cpp) (libkernel) - unknown signature
 - [sceKernelAddTimerEvent](../../core/libs/prx/libkernel/Equeue/Equeue.cpp) (libkernel) - `usec` is taken as the period in microseconds; re-adding an existing timer keeps its pending expiration count and restarts the period from the time of the call, where FreeBSD 12+ `filt_timertouch` clears pending expirations on `EV_ADD`; `usec == 0` fires on every wait. None of this is confirmed on a PS5 title
