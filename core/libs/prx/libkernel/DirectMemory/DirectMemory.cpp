@@ -223,7 +223,7 @@ void Trace(const char* format, ...) {
 
 class PhysicalBacking {
 public:
-    explicit PhysicalBacking(std::size_t bytes, int memoryType) : memoryType(memoryType) {
+    explicit PhysicalBacking(std::size_t bytes, int memoryType) : memoryType(memoryType), bytes(bytes) {
 #ifdef _WIN32
         const auto size = static_cast<std::uint64_t>(bytes);
         section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_EXECUTE_READWRITE, static_cast<DWORD>(size >> 32), static_cast<DWORD>(size), nullptr);
@@ -253,12 +253,22 @@ public:
 
 #if defined(__linux__)
     int File() const { return file; }
+    void* HostWriteData(std::uint64_t offset, std::size_t length) {
+        if (offset > bytes || length > bytes - offset) return nullptr;
+        if (hostWriteView == nullptr) {
+            auto* mapped = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, file, 0);
+            if (mapped == MAP_FAILED) return nullptr;
+            hostWriteView = mapped;
+        }
+        return static_cast<std::byte*>(hostWriteView) + offset;
+    }
 #endif
 
     ~PhysicalBacking() {
 #ifdef _WIN32
         CloseHandle(section);
 #else
+        if (hostWriteView != nullptr) ::munmap(hostWriteView, bytes);
         ::close(file);
 #endif
     }
@@ -276,10 +286,12 @@ public:
 
 private:
     int memoryType;
+    std::size_t bytes;
 #ifdef _WIN32
     HANDLE section = nullptr;
 #else
     int file = -1;
+    void* hostWriteView = nullptr;
 #endif
 };
 
@@ -385,6 +397,38 @@ bool SharedBacking(std::uintptr_t address, std::size_t bytes, int* file, std::ui
     if (duplicate < 0) throw std::system_error(errno, std::generic_category(), "duplicate direct memory backing");
     *file = duplicate;
     *offset = page->second.offset + phys % PS5_PAGE_SIZE;
+    return true;
+}
+
+bool WriteSharedBacking(std::uintptr_t address, const void* source, std::size_t bytes) {
+    if (bytes == 0 || bytes > std::numeric_limits<std::uintptr_t>::max() - address) return false;
+    std::lock_guard lock(g_directLock);
+    const auto next = g_directMappings.upper_bound(address);
+    if (next == g_directMappings.begin()) return false;
+    struct WriteSpan {
+        void* destination;
+        std::size_t bytes;
+    };
+    std::vector<WriteSpan> spans;
+    const auto end = address + bytes;
+    auto it = std::prev(next);
+    for (auto cursor = address; cursor < end; ++it) {
+        if (it == g_directMappings.end() || it->first > cursor || cursor >= it->second.end) return false;
+        const auto physical = it->second.phys + (cursor - it->first);
+        const auto page = g_physPages.find(physical - physical % PS5_PAGE_SIZE);
+        if (page == g_physPages.end() || page->second.backing != it->second.backing) return false;
+        const auto offset = page->second.offset + physical % PS5_PAGE_SIZE;
+        const auto length = std::min(end, it->second.end) - cursor;
+        auto* destination = it->second.backing->HostWriteData(offset, length);
+        if (destination == nullptr) return false;
+        spans.push_back({destination, length});
+        cursor += length;
+    }
+    auto* input = static_cast<const std::byte*>(source);
+    for (const auto& span : spans) {
+        std::memcpy(span.destination, input, span.bytes);
+        input += span.bytes;
+    }
     return true;
 }
 #endif
@@ -792,7 +836,10 @@ void CreateDirectMemoryBacking(int64_t start, size_t len, int memoryType) {
     }
 #if defined(__linux__)
     static std::once_flag registered;
-    std::call_once(registered, [] { GuestArena::GuestArenaSetSharedBacking_nid_postfix(&SharedBacking); });
+    std::call_once(registered, [] {
+        GuestArena::GuestArenaSetSharedBacking_nid_postfix(&SharedBacking);
+        GuestArena::GuestArenaSetSharedBackingWriter_nid_no_patch(&WriteSharedBacking);
+    });
 #endif
     const auto backing = std::make_shared<PhysicalBacking>(len, memoryType);
     std::map<std::uint64_t, PhysicalPage> pages;
