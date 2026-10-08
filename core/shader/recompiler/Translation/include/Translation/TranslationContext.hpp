@@ -292,6 +292,9 @@ private:
     void vInterpP1F32(const RdnaInstruction& inst);
     void vInterpP2F32(const RdnaInstruction& inst);
     void vInterpMovF32(const RdnaInstruction& inst);
+    IrF32 interpolationParameterF16(const RdnaInstruction& inst, std::uint32_t mode);
+    void vInterpP1F16(const RdnaInstruction& inst);
+    void vInterpP2F16(const RdnaInstruction& inst);
     void eXP(const RdnaInstruction& inst);
     bool emitScalar(const RdnaInstruction& inst);
     bool emitVector(const RdnaInstruction& inst);

@@ -38,7 +38,7 @@ void TranslationContext::TranslateInstruction(const RdnaInstruction& decoded) {
         case RdnaInstructionFamily::VOP3:
         case RdnaInstructionFamily::VOP3P:
         case RdnaInstructionFamily::VOPC:
-            translated = emitVector(instruction);
+            translated = emitVector(instruction) || emitInterpolation(instruction);
             break;
         case RdnaInstructionFamily::SMEM:
         case RdnaInstructionFamily::MUBUF:
