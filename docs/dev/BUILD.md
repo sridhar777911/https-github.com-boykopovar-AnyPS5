@@ -29,6 +29,7 @@ Project switches accept `ON` or `OFF`:
 |----------------------------------|---------|--------------------------------------------------|
 | `-DBUILD_TESTING=ON`             | `OFF`   | Build and register tests.                        |
 | `-DANYPS5_ENABLE_SPIRV_TOOLS=ON` | `OFF`   | Enable SPIR-V validation and optimization.       |
+| `-DANYPS5_USE_SYSTEM_DEPS=ON`    | `OFF`   | Resolve SDL2, freetype, Vulkan-Headers, SPIRV-Headers, glslang and SPIRV-Tools from the system instead of the submodules. |
 | `-DAPS5_ENABLE_TIMING_LOG=ON`    | `OFF`   | Compile frame timing logging.                    |
 | `-DAPS5_AGC_CREATE_LOG=OFF`      | `ON`    | Disable successful `sceAgcCreateShader` logging. |
 | `-DAGC_BUILD_VISUAL_TEST=ON`     | `OFF`   | Build the standalone AGC SPIR-V visual test.     |
@@ -45,6 +46,8 @@ Build configuration parameters:
 | `-DFFMPEG_PREBUILT_DIR=<path>`         | Unpacked FFmpeg package for the target platform; empty by default. |
 
 SDL and FreeType settings forced by the root `CMakeLists.txt` cannot be overridden with `-D`.
+
+With `ANYPS5_USE_SYSTEM_DEPS=ON` those libraries come from the system (on Debian and Ubuntu: `libsdl2-dev`, `libfreetype-dev`, `libvulkan-dev`, `spirv-headers`, `glslang-dev`, `glslang-tools` and `spirv-tools`). A missing package, or Vulkan-Headers older than 1.4.310 (the agc driver uses `VK_KHR_maintenance8`), fails the configure with an error and never falls back to the submodule. The prx libraries are shared objects, so SDL2 is linked from the system as a shared library; the default build keeps its own static SDL2. `ffmpeg-core`, `libjpeg-turbo`, `stb`, `VulkanMemoryAllocator` and `LibAtrac9` always stay bundled and still need `git submodule update --init`.
 
 ## Pipeline statistics
 
