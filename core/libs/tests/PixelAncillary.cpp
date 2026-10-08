@@ -51,12 +51,25 @@ static void Refused(IrOpcode opcode, std::uint32_t offset, std::uint32_t count) 
     }
     Require(false);
 }
+static void Whole() {
+    IrProgram program;
+    auto& user = Build(program, IrOpcode::BitwiseOr32, 1u, 0u);
+    Lower(program);
+    const IrValue* word = user.Argument(0)->Resolve();
+    Require(word->Opcode() == IrOpcode::BitwiseOr32);
+    const IrValue* sample = word->Argument(0)->Resolve();
+    const IrValue* layer = word->Argument(1)->Resolve();
+    Require(sample->Opcode() == IrOpcode::ShiftLeftLogical32 && sample->Argument(1)->Resolve()->ImmediateU32() == 8u);
+    Require(static_cast<StageInputKind>(sample->Argument(0)->Resolve()->Argument(0)->Resolve()->ImmediateU32()) == StageInputKind::SampleId);
+    Require(layer->Opcode() == IrOpcode::ShiftLeftLogical32 && layer->Argument(1)->Resolve()->ImmediateU32() == 16u);
+    Require(static_cast<StageInputKind>(layer->Argument(0)->Resolve()->Argument(0)->Resolve()->ImmediateU32()) == StageInputKind::Layer);
+}
 int main() {
     Extract(IrOpcode::BitFieldUExtract, 8u, 4u, StageInputKind::SampleId, 0u);
     Extract(IrOpcode::BitFieldUExtract, 9u, 2u, StageInputKind::SampleId, 1u);
     Extract(IrOpcode::BitFieldUExtract, 16u, 13u, StageInputKind::Layer, 0u);
     Extract(IrOpcode::BitFieldSExtract, 20u, 9u, StageInputKind::Layer, 4u);
-    Refused(IrOpcode::BitwiseOr32, 1u, 0u);
+    Whole();
     Refused(IrOpcode::BitFieldUExtract, 2u, 4u);
     Refused(IrOpcode::BitFieldUExtract, 10u, 4u);
     Refused(IrOpcode::BitFieldUExtract, 13u, 2u);

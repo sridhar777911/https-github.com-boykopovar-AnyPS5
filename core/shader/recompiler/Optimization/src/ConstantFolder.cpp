@@ -215,14 +215,17 @@ bool lowerPackedAncillary(IrProgram& program, IrBuilder& builder, IrValue& ancil
     };
     constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 2> ranges {{{8u, 4u}, {16u, 13u}}};
     bool lowered = false;
+    std::vector<IrUse> whole;
     for (const IrUse& use : uses) {
         IrValue& user = *use.user;
         if ((user.Opcode() != IrOpcode::BitFieldUExtract && user.Opcode() != IrOpcode::BitFieldSExtract) || use.operand != 0u) {
+            whole.push_back(use);
             continue;
         }
         auto& offset = resolveArg(user, 1);
         auto& count = resolveArg(user, 2);
         if (!isImmediate(offset, IrType::U32) || !isImmediate(count, IrType::U32) || count.ImmediateU32() == 0u) {
+            whole.push_back(use);
             continue;
         }
         const auto range = std::ranges::find_if(ranges, [&](const auto& candidate) {
@@ -236,7 +239,23 @@ bool lowerPackedAncillary(IrProgram& program, IrBuilder& builder, IrValue& ancil
         user.ReplaceArgument(1, &builder.Constant(offset.ImmediateU32() - range->first));
         lowered = true;
     }
-    return lowered;
+    if (whole.empty()) {
+        return lowered;
+    }
+    const auto emit = [&](IrOpcode opcode, IrValue& lhs, IrValue& rhs) -> IrValue& {
+        IrValue& created = program.CreateValue(opcode, IrType::U32);
+        created.AddArgument(&lhs);
+        created.AddArgument(&rhs);
+        ancillary.Parent()->InsertInstructionBefore(&ancillary, &created);
+        return created;
+    };
+    IrValue& sample = emit(IrOpcode::ShiftLeftLogical32, field(0u), builder.Constant(8u));
+    IrValue& layer = emit(IrOpcode::ShiftLeftLogical32, field(1u), builder.Constant(16u));
+    IrValue& packed = emit(IrOpcode::BitwiseOr32, sample, layer);
+    for (const IrUse& use : whole) {
+        use.user->ReplaceArgument(use.operand, &packed);
+    }
+    return true;
 }
 
 } // namespace
