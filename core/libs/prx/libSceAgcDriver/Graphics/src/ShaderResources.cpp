@@ -844,10 +844,11 @@ struct TableTexture {
     bool firstLayer = false;
 };
 
-TableTexture PrevalidateTableTexture(std::span<const std::uint32_t> words, ShaderRecompiler::DescriptorImageShape shape) {
+TableTexture PrevalidateTableTexture(std::span<const std::uint32_t> words, ShaderRecompiler::DescriptorImageShape shape, std::uint32_t samplerMask, std::span<const std::shared_ptr<Sampler>> samplers) {
     try {
         TableTexture texture;
         texture.resource = DecodeTextureResource(words);
+        RequireDegammaFormat(texture.resource.format, samplerMask, samplers);
         texture.firstLayer = shape == ShaderRecompiler::DescriptorImageShape::Image2D && texture.resource.dimension == TextureDimension::k2DArray;
         if (!texture.firstLayer && !MatchesGuestDimension(shape, texture.resource.dimension)) throw DescriptorRejected("AGC graphics: guest texture dimension disagrees with the shader's declared image shape (shape " + std::to_string(static_cast<int>(shape)) + ", dimension " + std::to_string(static_cast<int>(texture.resource.dimension)) + ")");
         texture.guestBytes = DescribeSurface(texture.resource).guestBytes;
@@ -981,7 +982,7 @@ void ShaderResources::buildPrepare(std::span<const CompiledShader> shaders, cons
                     stageResources += binding.count;
                     Require(stageResources <= context.limits.maxPerStageResources, "shader descriptors exceed per-stage limits");
                     const auto elements = binding.guestDescriptor.size() / 8u;
-                    Require(binding.guestDescriptor.size() % 8u == 0 && elements <= binding.count && binding.imageShapes.size() == elements && binding.imageDepthCompare.size() == elements, "image table binding is malformed");
+                    Require(binding.guestDescriptor.size() % 8u == 0 && elements <= binding.count && binding.imageShapes.size() == elements && binding.imageDepthCompare.size() == elements && binding.imageSamplers.size() == elements, "image table binding is malformed");
                     Require(context.detiler != nullptr && context.textureCache != nullptr, "device texture cache is unavailable");
                     Require(binding.count <= context.limits.maxPerStageDescriptorSampledImages, "image table exceeds the per-stage sampled image limit");
                     plannedTableImages += binding.count;
@@ -1063,6 +1064,11 @@ void ShaderResources::buildPrepare(std::span<const CompiledShader> shaders, cons
             for (auto index = firstDeferred; index < deferredImages.size(); ++index) {
                 deferredImages[index].firstSampler = firstSampler;
                 deferredImages[index].samplerCount = samplers.size() - firstSampler;
+            }
+            for (auto& table : tablePrograms) {
+                if (table.stage != shader.stage) continue;
+                table.firstSampler = firstSampler;
+                table.samplerCount = samplers.size() - firstSampler;
             }
         }
         Require(storageBuffers <= context.limits.maxDescriptorSetStorageBuffers, "pipeline descriptors exceed device limits");
@@ -2549,9 +2555,9 @@ void ShaderResources::addImageBinding(const ShaderRecompiler::DescriptorBinding&
             const bool unnormalized = element < binding.samplerUnnormalized.size() && binding.samplerUnnormalized[element];
             static const bool noSamplerCache = std::getenv("APS5_NO_SAMPLER_CACHE") != nullptr;
             if (context.samplerCache != nullptr && !noSamplerCache) {
-                samplers.push_back(context.samplerCache->Get(context, words, compareEnable, unnormalized));
+                samplers.push_back(context.samplerCache->Get(context, words, compareEnable, unnormalized, true));
             } else {
-                auto resource = DecodeSamplerResource(words, unnormalized);
+                auto resource = DecodeSamplerResource(words, unnormalized, true);
                 resource.compareEnable = compareEnable;
                 samplers.push_back(std::make_shared<Sampler>(context, resource));
             }
@@ -2701,6 +2707,7 @@ void ShaderResources::resolveImageBinding(const ShaderRecompiler::DescriptorBind
             const auto words = std::span<const std::uint32_t>(binding.guestDescriptor).subspan(static_cast<std::size_t>(element) * elementWords, elementWords);
             const auto* record = nextRecord();
             const auto resource = record != nullptr && record->decoded ? record->resource : DecodeTextureResource(words);
+            RequireDegammaFormat(resource.format, binding.imageSamplers[element], shaderSamplers);
             const bool firstLayer = binding.imageShape == ShaderRecompiler::DescriptorImageShape::Image2D && resource.dimension == TextureDimension::k2DArray;
             if (!firstLayer && !MatchesGuestDimension(*binding.imageShape, resource.dimension)) throw std::runtime_error("AGC graphics: guest texture dimension disagrees with the shader's declared image shape (shape " + std::to_string(static_cast<int>(*binding.imageShape)) + ", dimension " + std::to_string(static_cast<int>(resource.dimension)) + ")");
             const VkComponentMapping components = ViewComponents(resource);
@@ -2838,11 +2845,12 @@ void ShaderResources::resolveImageTable(TableProgram& table) {
     auto& item = bindings[table.imageBinding];
     const auto elements = binding.guestDescriptor.size() / 8u;
     table.imagePoison.assign(elements, ShaderRecompiler::ImageTableAbi::PoisonFlag);
+    const auto shaderSamplers = std::span<const std::shared_ptr<Sampler>>(samplers).subspan(table.firstSampler, table.samplerCount);
     for (std::size_t element = 0; element < elements; ++element) {
         const auto words = std::span<const std::uint32_t>(binding.guestDescriptor).subspan(element * 8u, 8u);
         TableTexture texture;
         try {
-            texture = PrevalidateTableTexture(words, binding.imageShapes.at(element));
+            texture = PrevalidateTableTexture(words, binding.imageShapes.at(element), binding.imageSamplers.at(element), shaderSamplers);
         } catch (const DescriptorRejected& error) {
             table.imagePoison[element] = static_cast<std::uint32_t>(table.poison.size());
             ShaderRecompiler::ImageTableEntryPoison poison{};

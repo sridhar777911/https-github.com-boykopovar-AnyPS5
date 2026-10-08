@@ -44,6 +44,9 @@ constexpr std::uint32_t Format32UInt = 20;
 constexpr std::uint32_t Format32SInt = 21;
 constexpr std::uint32_t Format32Float = 22;
 constexpr std::uint32_t Format8_8Srgb = 129;
+constexpr std::uint32_t Format8888UNorm = 56;
+constexpr std::uint32_t Format8888Srgb = 130;
+constexpr std::uint32_t ForceDegamma = 1u << 20u;
 constexpr std::uint32_t Type2D = 9;
 
 alignas(256) std::array<float, Width * Height> FloatTexels{};
@@ -424,6 +427,38 @@ void RunTests(AgcDriver::VulkanDevice& device) {
     Require(Group(tableSampler, 0) == Group(uintControl, 0), "image table: a direct uint T# under a linear table S# differs from the direct binding");
     RequireRed(tableSampler, 0, Lanes, [](std::uint32_t x) { return UintTexels[x]; }, "direct uint texels through a linear table sampler");
     RequireRed(tableSampler, 1, Lanes, [](std::uint32_t x) { return UintTexels[x]; }, "direct uint texels through a point table sampler");
+
+    const std::array<std::uint32_t, 4> forcedPoint{PointClamp[0] | ForceDegamma, PointClamp[1], PointClamp[2], PointClamp[3]};
+    const auto srgbTexels = Image(UintTexels.data(), Format8888Srgb);
+    const auto unormTexels = Image(UintTexels.data(), Format8888UNorm);
+    SetRecord(10, PointClamp, srgbTexels);
+    SetRecord(11, PointClamp, unormTexels);
+    std::copy(forcedPoint.begin(), forcedPoint.end(), Srt.begin() + 12);
+    Keys = {};
+    Keys[0] = 10;
+    const auto forcedSrgb = Run(device, TableDirectSamplerCode, 1, Lanes, 64);
+    Require(!Faulted(forcedSrgb), "image table: an 8_8_8_8_SRGB entry under a direct S# that forces sRGB decoding faulted:\n" + forcedSrgb.log);
+    Require(Group(forcedSrgb, 0) == Group(RunDirect(device, PointClamp, srgbTexels), 0) && Group(forcedSrgb, 0) == Group(RunDirect(device, forcedPoint, srgbTexels), 0), "image table: an 8_8_8_8_SRGB entry under a direct S# that forces sRGB decoding differs from the direct binding");
+    std::copy(forcedPoint.begin(), forcedPoint.end(), Srt.begin() + 12);
+    Keys[0] = 11;
+    const auto forcedUnorm = Run(device, TableDirectSamplerCode, 1, Lanes, 64);
+    const std::string degamma = "guest format 56, which is not sRGB, is sampled through a sampler that forces sRGB decoding";
+    Require(Faulted(forcedUnorm) && forcedUnorm.log.find(degamma) != std::string::npos, "image table: an 8_8_8_8_UNORM entry under a direct S# that forces sRGB decoding did not fault:\n" + forcedUnorm.log);
+    Require(std::all_of(forcedUnorm.words.begin(), forcedUnorm.words.end(), [](std::uint32_t word) { return word == 0u || word == 0xdeadbeefu; }), "image table: an 8_8_8_8_UNORM entry under a direct S# that forces sRGB decoding did not sample zeros");
+    std::string degammaRefusal;
+    try {
+        static_cast<void>(RunDirect(device, forcedPoint, unormTexels));
+    } catch (const std::exception& error) {
+        degammaRefusal = error.what();
+    }
+    Require(degammaRefusal.find(degamma) != std::string::npos, "image table: the direct binding of the 8_8_8_8_UNORM entry under a forcing S# was not refused: " + degammaRefusal);
+    std::copy(srgbTexels.begin(), srgbTexels.end(), Srt.begin() + 16);
+    SetRecord(10, forcedPoint, srgbTexels);
+    Keys[0] = 10;
+    const auto forcedTableSampler = Run(device, TableSamplerCode, 1, Lanes, 64);
+    Require(Faulted(forcedTableSampler) && forcedTableSampler.log.find("forces sRGB decoding") != std::string::npos, "image table: a sampler table S# that forces sRGB decoding did not fault:\n" + forcedTableSampler.log);
+    SetRecord(10, PointClamp, floatImage);
+    SetRecord(11, PointClamp, floatImage);
 
     if (device.Target().subgroupSize == 32u) {
         for (std::uint32_t wave = 0; wave < 8; ++wave) Keys[wave] = wave % 3u;

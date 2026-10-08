@@ -281,6 +281,8 @@ private:
         std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
         std::vector<std::uint32_t> imagePoison;
         std::vector<std::uint32_t> samplerPoison;
+        std::size_t firstSampler = 0;
+        std::size_t samplerCount = 0;
     };
     std::vector<TableProgram> tablePrograms;
     TableProgram& tableProgram(const CompiledShader& shader);

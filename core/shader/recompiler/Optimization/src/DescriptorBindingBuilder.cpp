@@ -293,6 +293,47 @@ bool SamplesTableImage(const ShaderInfo& info, std::uint32_t sampler) {
     return std::any_of(info.sampledPairs.begin(), info.sampledPairs.end(), [&](const SampledResourcePair& pair) { return pair.sampler == sampler && info.images.at(pair.image).tableView != NoTableView; });
 }
 
+std::vector<std::uint32_t> TableImageSamplerMasks(const ShaderInfo& info, const std::vector<std::uint32_t>& samplerElements, const ImageTableSnapshot& tables) {
+    std::vector<std::uint32_t> viewMasks(info.tableViews.size(), 0u);
+    for (const SampledResourcePair& pair : info.sampledPairs) {
+        const std::uint32_t view = info.images.at(pair.image).tableView;
+        if (view == NoTableView || info.samplers.at(pair.sampler).tableView != NoTableView) {
+            continue;
+        }
+        if (pair.sampler >= samplerElements.size() || samplerElements[pair.sampler] >= ShaderInfo::MaxSamplers) {
+            fail("DescriptorBindingBuilder::Populate sampled image pair names a sampler outside the first " + std::to_string(ShaderInfo::MaxSamplers) + " elements of the sampler binding");
+        }
+        viewMasks.at(view) |= 1u << samplerElements[pair.sampler];
+    }
+    std::vector<std::uint32_t> masks(tables.images.size(), 0u);
+    for (std::uint32_t view = 0; view < viewMasks.size(); view++) {
+        if (viewMasks[view] == 0u) {
+            continue;
+        }
+        const std::size_t header = ImageTableAbi::HeaderWords + static_cast<std::size_t>(ImageTableAbi::ViewWords) * view;
+        if (header + ImageTableAbi::ViewWords > tables.map.size()) {
+            fail("DescriptorBindingBuilder::Populate image table map lacks a sampled view");
+        }
+        const std::uint32_t start = tables.map[header + ImageTableAbi::ViewMapStart];
+        const std::uint32_t keys = tables.map[header + ImageTableAbi::ViewKeyCount];
+        if (static_cast<std::uint64_t>(start) + keys > tables.map.size()) {
+            fail("DescriptorBindingBuilder::Populate image table map view is truncated");
+        }
+        for (std::uint32_t key = 0; key < keys; key++) {
+            const std::uint32_t code = tables.map[start + key];
+            if (code == ImageTableAbi::NullCode || (code & (ImageTableAbi::PoisonFlag | ImageTableAbi::SamplerFlag)) != 0u) {
+                continue;
+            }
+            const std::uint32_t entry = code & ImageTableAbi::ElementMask;
+            if (entry >= masks.size()) {
+                fail("DescriptorBindingBuilder::Populate image table map names an entry the snapshot lacks");
+            }
+            masks[entry] |= viewMasks[view];
+        }
+    }
+    return masks;
+}
+
 std::uint32_t TableBucket(std::size_t elements, std::uint32_t budget) {
     std::uint32_t bucket = 16u;
     while (bucket < elements && bucket < budget) {
@@ -419,6 +460,7 @@ void DescriptorBindingBuilder::Populate(BindingAllocationResult& allocation, con
                 physical.imageWritten.push_back(false);
                 physical.imageAtomic.push_back(false);
             }
+            physical.imageSamplers = TableImageSamplerMasks(info, samplerElements, snapshot.tables);
             physical.count = TableBucket(snapshot.tables.images.size(), ImageTableAbi::ImageBudget);
             break;
         case DescriptorRole::SamplerTable:
